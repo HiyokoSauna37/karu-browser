@@ -1,0 +1,101 @@
+<p align="right"><b>English</b> | <a href="README.ja.md">日本語</a></p>
+
+<p align="center">
+  <img src="karu.preview.png" width="120" alt="Karu logo">
+</p>
+
+<h1 align="center">Karu</h1>
+
+<p align="center">A lightweight, keyboard-first Windows browser built for watching video without your RAM disappearing.</p>
+
+---
+
+Karu (軽 — "light") is a personal WPF + WebView2 (Chromium) browser for Windows, designed around one goal: keep memory usage low while browsing and watching video, without giving up a real Chromium engine. It has no tab bar, no URL bar, and no toolbar — everything is driven from the keyboard, Vim-style.
+
+## Why
+
+Chromium-based browsers are memory-hungry, and most "lightweight browser" alternatives either drop features or aren't actually Chromium (so sites/DRM/codecs behave differently). Karu instead runs real WebView2 (the same engine as Edge/Chrome) but:
+
+- aggressively suspends and hibernates background tabs,
+- tunes dozens of Chromium flags/features for low memory instead of speed,
+- can hand video playback off to [mpv](https://mpv.io/) entirely, dropping Chromium's own resource usage for that tab to near zero,
+- strips the browser chrome itself (tab bar/URL bar/toolbar) down to a single 40px drag bar, replaced by keyboard-driven overlays.
+
+## Features
+
+- **Chromeless UI** — no tab bar, no URL bar. Everything is a keyboard overlay or a single 40px title bar.
+- **3-stage tab lifecycle** — Active → Suspended (WebView2 `TrySuspendAsync`, ~15s after losing focus) → Hibernated (WebView fully disposed, only URL + video position kept, ~3–10 min depending on tab "warmth"). An emergency hibernation kicks in when available system memory drops below a threshold. Audio-playing tabs are never touched.
+- **Vim-style keyboard layer** — injected into every page: `j/k/h/l` scroll, `d/u` half-page, `gg/G` top/bottom, `f/F` link hints, `H/L` back/forward, `yy` copy URL, `?` help overlay, and more.
+- **Keyboard-driven tab list** (`Ctrl+Tab`) and **bookmark list** (`b`) — both support `j/k` + `Enter` to select, and toggle closed by pressing the same key again.
+- **YouTube-focused tuning** — in-player ad skipping, playback quality cap, forced H.264 (avoids VP9/AV1 decode cost), a "focus mode" that hides comments/related/shorts shelves, and an on-player speed button.
+- **[mpv](https://mpv.io/) handoff** (`Ctrl+M`) — plays the current video in mpv (via yt-dlp) and collapses the page to a lightweight placeholder once playback is confirmed, keeping playback position for switching back.
+- **Ad/tracker blocking** — either a built-in domain blocklist, or sideload uBlock Origin's unpacked extension (Karu injects its content scripts manually, since WebView2 doesn't run extension content scripts on its own).
+- **Session restore, saved passwords/autofill, bookmarks.**
+- **Caret browsing, video fullscreen via CDP, live memory usage breakdown.**
+
+## Keybindings
+
+| Key | Action |
+|---|---|
+| `j` / `k` | Scroll down / up |
+| `h` / `l` | Scroll left / right |
+| `d` / `u` | Half-page down / up |
+| `gg` / `G` | Scroll to top / bottom |
+| `f` / `F` | Link hints (open / open in new tab) |
+| `H` / `L` | Back / forward |
+| `r` | Reload |
+| `yy` | Copy current URL |
+| `>` / `<` / `=` | Playback speed +0.25 / −0.25 / reset |
+| `?` | Toggle help overlay |
+| `t` | New tab |
+| `x` / `X` | Close tab / restore closed tab |
+| `o` / `Ctrl+L` | URL / search overlay |
+| `Ctrl+Tab` | Tab list overlay (`j/k`+`Enter` to switch, `Ctrl+W` to close selected) |
+| `b` | Bookmark list overlay (`j/k`+`Enter`, `Shift+Enter` new tab, `b`/`Esc` to close) |
+| `J` / `K` | Previous / next tab |
+| `Ctrl+T` / `Ctrl+W` | New tab / close tab |
+| `Ctrl+D` | Bookmark current page |
+| `Ctrl+1`–`9` | Jump to tab N / last tab |
+| `Ctrl+Shift+T` | Reopen last closed tab |
+| `Ctrl+M` | Open current video in mpv |
+| `Ctrl+E` | Open current page in Edge (for DRM video) |
+| `Ctrl+B` | Toggle video focus mode |
+| `Ctrl+O` | Toggle video fullscreen |
+| `F7` | Toggle caret browsing (restarts app) |
+| `F11` | Toggle window fullscreen |
+| `Ctrl+Shift+W` | Quit |
+
+## Requirements
+
+- Windows 10/11
+- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) — already present on most Windows 11/10 machines with Edge installed
+- [mpv](https://mpv.io/) (optional, for `Ctrl+M`) — `winget install mpv-player.mpv-CI.MSVC`
+
+## Install
+
+Download the latest zip from [Releases](../../releases), extract it anywhere, and run `Karu.exe`.
+
+> Karu isn't code-signed yet, so Windows SmartScreen may warn about an unrecognized app on first run. Click **More info → Run anyway**. See [why](#a-note-on-smartscreen) below if you'd rather build it yourself.
+
+## Build from source
+
+```
+dotnet publish Karu.csproj -c Release -o dist
+```
+
+The result is a framework-dependent build in `dist/` (requires the .NET 8 Desktop Runtime on the target machine).
+
+## Configuration
+
+Settings, bookmarks, the ad blocklist, and sideloaded extensions all live in `%APPDATA%\Karu`. WebView2's own profile data (cookies, login sessions) is under `%LOCALAPPDATA%\Karu\WebView2Data`. Open the settings folder from the in-app menu (top-right `≡` button).
+
+To use uBlock Origin instead of the built-in blocklist, download its unpacked Chromium extension and place it under `%APPDATA%\Karu\extensions\`.
+
+## A note on SmartScreen
+
+Karu disables some Chromium telemetry/protection flags (including its own SmartScreen integration) as part of its low-memory tuning, and injects scripts into every page for the Vim layer and YouTube tweaks. That's normal for this project, but it's also the kind of behavior heuristic antivirus/SmartScreen sometimes flags on unsigned, low-reputation binaries — hence the warning on first run. Building from source (above) avoids that entirely.
+
+## License
+
+[MIT](LICENSE)

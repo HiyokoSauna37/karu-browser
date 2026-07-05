@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Karu</AssemblyName>
+    <RootNamespace>Karu</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>karu.ico</ApplicationIcon>
+    <!-- AddWebResourceRequestedFilter の旧オーバーロードが新SDKで obsolete 扱いのため -->
+    <NoWarn>$(NoWarn);CS0618</NoWarn>
+    <!-- ホスト側(WPF)の常駐メモリ削減: 併走GCスレッドを止める -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="karu.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- GCに省メモリ動作を指示 (0-9, 大きいほど積極的にヒープを返す) -->
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
+
+</Project>
