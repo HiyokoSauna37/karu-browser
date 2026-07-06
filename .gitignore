@@ -4,3 +4,4 @@ dist/
 *.user
 .vs/
 *.suo
+RELEASE_HOWTO.md
