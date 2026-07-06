@@ -53,7 +53,11 @@ static class Injections
     if (!cover) {
       cover = document.createElement('div');
       cover.id = '__karuLoad';
-      cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;' +
+      // 半透明+ぼかし。完全に隠すと「ブラウザが固まった」ように見えるため、
+      // 裏でページが実際に描画・変化している気配をうっすら見せて「処理中」だと伝える
+      // ぼかし量はブックマーク一覧(bキー)のオーバーレイと揃える(blur(4px))
+      cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;' +
+        'background:rgba(17,17,17,.82);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);' +
         'display:flex;align-items:center;justify-content:center';
       cover.innerHTML =
         '<style>#__karuLoad svg{position:absolute;inset:0;width:88px;height:88px;' +
@@ -85,6 +89,21 @@ static class Injections
     poll(gen, performance.now());
   };
   begin(false); // 初回(本物のナビゲーション)。long taskが無い軽いページは即座に外れる
+
+  // 離脱ナビゲーション開始(=リンククリック)の瞬間、遷移「元」のこのページに被いを出す。
+  // ホストからExecuteScriptAsyncで頼む方式はナビゲーション進行中でレースになり届かないことがある。
+  // beforeunloadはページ内で同期的に発火するため確実。gen++で自ページのpoll(解除判定)を止め、
+  // ナビゲーションが中断された場合はホストのhide呼び出しか8秒の保険で解除する
+  // (成功時はドキュメントごと破棄されるので後始末不要)。
+  // 注: beforeunloadリスナーはBFCacheを無効にするが、Karuは起動フラグで元々BackForwardCacheを
+  // 切っている(メモリ優先)ため実害はない
+  addEventListener('beforeunload', () => {
+    gen++;
+    show();
+    clearTimeout(pollId);
+    setTimeout(() => hide(), 8000);
+  });
+  window.__karuCoverHide = () => hide(); // ホストがナビゲーション失敗時に呼ぶ
 
   // ---- SPA(pushState/replaceState/popstate)遷移。URLが実際に変わった時だけ被いを出し直す ----
   let lastHref = location.href;

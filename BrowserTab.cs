@@ -79,16 +79,6 @@ public class BrowserTab : INotifyPropertyChanged
     /// <summary>ナビゲーション中かどうか (NavigationStarting〜Completed)。タイトルバーの炎表示に使う。</summary>
     public bool IsLoading;
 
-    /// <summary>WPF側の読み込み被い(中央の炎)を表示中かどうか。NavigationStartingで立ち
-    /// Completedで下りる。以降の「見た目は表示済みだが操作できない」期間はページ内注入の
-    /// PageCoverが引き継ぐため、ホスト側の管理はここまででよい。</summary>
-    public bool IsCovering;
-
-    /// <summary>次の1回のナビゲーションで読み込み被いを出さない。スタートページ等の内部生成ページ
-    /// (NavigateToString)を開く直前に立てる。URI文字列(about:blank/data:)での判定は
-    /// WebView2のバージョンにより表現が揺れるため、開く側の明示フラグで確実に抑制する。</summary>
-    public bool SuppressCoverOnce;
-
     public event PropertyChangedEventHandler? PropertyChanged;
     void OnChanged([CallerMemberName] string? name = null)
         => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));

@@ -37,9 +37,8 @@ public partial class MainWindow
         SetMemoryTarget(tab, low: false);
         // キーボード主体のため、タブ切替時は即ページへフォーカス
         if (!IsOverlayOpen) tab.View?.Focus();
-        // 切替先タブの読み込み状態に炎インジケーターの表示を合わせる (2つは別々の条件で消える)
+        // 切替先タブの読み込み状態にタイトルバーの炎を合わせる (中央の被いはページDOM内なので自動で付いてくる)
         if (tab.IsLoading) ShowTitleBarFlame(); else HideTitleBarFlame();
-        if (tab.IsCovering) ShowContentCover(); else HideContentCover();
         // 要素全画面のタブから切替/閉鎖したとき、離脱イベントは飛んでこない(破棄時は特に)ので
         // ここで新タブの状態に合わせて解除する。F11手動全画面はタブに紐付かないので触らない
         if (_fullscreen && _fsFromElement)
@@ -263,10 +262,7 @@ public partial class MainWindow
     }
 
     void ShowStartPage(BrowserTab tab)
-    {
-        tab.SuppressCoverOnce = true; // 内部ページは一瞬で描画されるので読み込み被いを出さない
-        tab.View?.CoreWebView2?.NavigateToString(StartPage.Generate(Bookmarks));
-    }
+        => tab.View?.CoreWebView2?.NavigateToString(StartPage.Generate(Bookmarks));
 
     string ActiveUrl()
     {

@@ -1,9 +1,11 @@
 ﻿using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using Microsoft.Web.WebView2.Core;
 
 namespace Karu;
@@ -27,12 +29,43 @@ public partial class MainWindow
     void RestoreActiveViewAfterOverlay()
     {
         if (IsOverlayOpen) return;
-        if (LoadingCover.Visibility == Visibility.Visible) return; // 読み込み被い表示中はそちらの解除に任せる
+        OverlayBackdrop.Visibility = Visibility.Collapsed;
+        OverlayBackdrop.Source = null;
         if (_active?.View is not null)
         {
             _active.View.Visibility = Visibility.Visible;
             _active.View.Focus();
         }
+    }
+
+    /// <summary>オーバーレイを開く直前に呼ぶ。WebViewを隠す前のページを1枚キャプチャしてぼかして
+    /// 敷いてから隠すことで、隠している間も裏でページが見えているかのような背景にする
+    /// (真っ暗な単色より「処理中」感が出て、他のページ内オーバーレイ(bキー等)のぼかしとも見た目が揃う)。</summary>
+    async Task ShowOverlayBackdrop()
+    {
+        var core = _active?.View?.CoreWebView2;
+        if (core is not null)
+        {
+            try
+            {
+                using var stream = new MemoryStream();
+                // PNGはフルサイズのエンコードが重くオーバーレイが開くまで待たされる。
+                // ぼかして敷くだけなのでJPEG+半分解像度デコードで十分(体感差が出るほど速い)
+                await core.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Jpeg, stream);
+                stream.Position = 0;
+                var img = new BitmapImage();
+                img.BeginInit();
+                img.CacheOption = BitmapCacheOption.OnLoad;
+                img.DecodePixelWidth = Math.Max(320, (int)(WebHost.ActualWidth / 2));
+                img.StreamSource = stream;
+                img.EndInit();
+                img.Freeze();
+                OverlayBackdrop.Source = img;
+                OverlayBackdrop.Visibility = Visibility.Visible;
+            }
+            catch { OverlayBackdrop.Visibility = Visibility.Collapsed; }
+        }
+        HideActiveViewForOverlay();
     }
 
     void FocusOverlayBox(System.Windows.Controls.TextBox box)
@@ -45,10 +78,10 @@ public partial class MainWindow
 
     // ---- URL / 検索入力オーバーレイ (o / Ctrl+L) ----
 
-    void ShowUrlOverlay()
+    async void ShowUrlOverlay()
     {
         UrlInputBox.Text = ActiveUrl();
-        HideActiveViewForOverlay();
+        await ShowOverlayBackdrop();
         UrlOverlay.Visibility = Visibility.Visible;
         FocusOverlayBox(UrlInputBox);
     }
@@ -84,13 +117,13 @@ public partial class MainWindow
     readonly List<System.Windows.Controls.Border> _tabRows = new();
     int _tabSel;
 
-    void ShowTabOverlay()
+    async void ShowTabOverlay()
     {
         _tabSel = _active is null ? 0 : Math.Max(0, Tabs.IndexOf(_active));
         BuildTabRows();
-        HideActiveViewForOverlay();
+        await ShowOverlayBackdrop();
         TabOverlay.Visibility = Visibility.Visible;
-        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
         {
             TabOverlay.Focus();
             Keyboard.Focus(TabOverlay);
@@ -242,7 +275,7 @@ public partial class MainWindow
 
     // ---- お気に入り (Ctrl+D 名前編集オーバーレイ / b キー一覧) ----
 
-    void Star_Click(object sender, RoutedEventArgs e)
+    async void Star_Click(object sender, RoutedEventArgs e)
     {
         var url = ActiveUrl();
         if (url.Length == 0 || _active is null) return;
@@ -253,7 +286,7 @@ public partial class MainWindow
         else
         {
             StarNameBox.Text = _active.Title;
-            HideActiveViewForOverlay();
+            await ShowOverlayBackdrop();
             StarOverlay.Visibility = Visibility.Visible;
             FocusOverlayBox(StarNameBox);
         }
@@ -419,7 +452,6 @@ public partial class MainWindow
         try { if (c.Source != url) return; } catch { return; } // 別ページへ移動済みなら触らない
         tab.MpvReturnUrl = url;
         tab.MpvReturnPos = isLive ? 0 : pos;
-        tab.SuppressCoverOnce = true; // 内部プレースホルダーへの差し替えに読み込み被いは不要
         try { c.NavigateToString(StartPage.MpvHold(tab.Title)); } catch { }
     }
 
