@@ -1,0 +1,45 @@
+# v* 形式のタグを push すると自動でビルドして GitHub Release に zip を添付する。
+# 使い方:  git tag v0.2.0 && git push origin v0.2.0
+# 既存タグを打ち直した場合 (git tag -f + push -f) は、既存 Release の zip を差し替える。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # Release の作成・アセット添付に必要
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish
+        run: dotnet publish -c Release -o dist
+
+      - name: Package
+        shell: pwsh
+        run: |
+          # デバッグ情報(ビルドマシンのパスが埋まる)と doc コメント xml は配布に不要
+          Get-ChildItem dist -Recurse -Include *.pdb,*.xml | Remove-Item -Force
+          Compress-Archive -Path dist\* -DestinationPath "karu-browser-${{ github.ref_name }}-win.zip" -CompressionLevel Optimal
+
+      - name: Create or update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $zip = "karu-browser-$tag-win.zip"
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --clobber
+          } else {
+            gh release create $tag $zip --title $tag --generate-notes
+          }
