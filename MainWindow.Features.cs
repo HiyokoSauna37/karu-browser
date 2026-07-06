@@ -27,6 +27,7 @@ public partial class MainWindow
     void RestoreActiveViewAfterOverlay()
     {
         if (IsOverlayOpen) return;
+        if (LoadingCover.Visibility == Visibility.Visible) return; // 読み込み被い表示中はそちらの解除に任せる
         if (_active?.View is not null)
         {
             _active.View.Visibility = Visibility.Visible;
@@ -418,6 +419,7 @@ public partial class MainWindow
         try { if (c.Source != url) return; } catch { return; } // 別ページへ移動済みなら触らない
         tab.MpvReturnUrl = url;
         tab.MpvReturnPos = isLive ? 0 : pos;
+        tab.SuppressCoverOnce = true; // 内部プレースホルダーへの差し替えに読み込み被いは不要
         try { c.NavigateToString(StartPage.MpvHold(tab.Title)); } catch { }
     }
 

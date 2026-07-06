@@ -135,13 +135,30 @@
                     <Button Style="{StaticResource CaptionCloseButton}" Content="&#xE8BB;"
                             ToolTip="閉じる" Click="CloseWin_Click"/>
                 </StackPanel>
+                <Image x:Name="TitleBarFlame" Width="16" Height="16" Visibility="Collapsed"
+                       VerticalAlignment="Center" Margin="14,0,0,0" RenderOptions.BitmapScalingMode="HighQuality"/>
                 <TextBlock Text="Karu" Foreground="#666666" FontSize="12" VerticalAlignment="Center"
-                           Margin="14,0,0,0"/>
+                           Margin="8,0,0,0"/>
                 <Border Background="Transparent"/>
             </DockPanel>
 
             <Grid x:Name="WebHost" Background="#111111"/>
         </DockPanel>
+
+        <!-- ページ読み込み中の被い画面: リンククリック直後(NavigationStarting)からNavigationCompletedまでの
+             短い期間だけサイト表示領域を覆い、「もう処理が始まっている」ことを伝える。
+             それ以降の「見た目は表示済みだがまだ操作できない」期間は、ページ内注入のPageCover(Injections.cs)
+             がDOM内で引き継いで覆う(WebViewを隠さずページ可視のまま処理できるため、ホストの関与は不要)。
+             Margin上40px = TopBarを覆わない (読み込み中もドラッグ/メニュー/閉じるを使えるように) -->
+        <Border x:Name="LoadingCover" Background="#111111" Visibility="Collapsed" Margin="0,40,0,0">
+            <Image x:Name="LoadingFlame" Width="88" Height="88"
+                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                   RenderOptions.BitmapScalingMode="HighQuality">
+                <Image.Effect>
+                    <DropShadowEffect BlurRadius="28" ShadowDepth="0" Color="Black" Opacity="0.55"/>
+                </Image.Effect>
+            </Image>
+        </Border>
 
         <!-- ブックマーク名編集オーバーレイ (Ctrl+D) -->
         <Border x:Name="StarOverlay" Visibility="Collapsed" Background="#AA000000"

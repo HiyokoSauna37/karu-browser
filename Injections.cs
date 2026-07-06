@@ -12,6 +12,100 @@ static class Injections
     public static readonly string MessageToken = Guid.NewGuid().ToString("N");
 
     /// <summary>
+    /// ページ内読み込みカバー。ナビゲーション直後の「描画済みに見えるが操作できない」期間、
+    /// ページ全面を炎アニメーション付きの被いで覆う。ホストとの通信は不要(完全にページ内で完結)。
+    ///
+    /// WPF側オーバーレイでなくDOM内に置く理由: WPFで被うにはWebViewを非表示にする必要があり(airspace)、
+    /// 非表示ページはChromiumがタイマーを1秒間隔に間引くため「落ち着き」判定自体が遅れる悪循環になる。
+    /// DOM内ならページは可視のままで、タイマー・動画自動再生・遅延ロードがすべて正常に動く。
+    ///
+    /// 解除条件は「readyStateがloadingを抜けた」かつ「直近250msに50ms超の主スレッド占有(long task)が無い」。
+    /// DOM変化の静止待ちと違い操作可能性そのものを見るので、軽いページには待ち時間の下限がほぼ生じない。
+    /// pushState/replaceState/popstateによるSPA内遷移(YouTube/Netflix等)でも同じ被いを出し直す。
+    /// タブ切替との整合はDOM自体がタブに属するため自動的に取れる(ホスト側の状態管理が不要)。
+    /// </summary>
+    public const string PageCover = """
+(() => {
+  // 内部生成ページ(スタートページ/mpvプレースホルダー=NavigateToString)は一瞬で描画されるので出さない
+  if (location.href === 'about:blank' || location.protocol === 'data:') return;
+  const QUIET = 250, MAX = 8000;
+  let lastBusy = 0, gen = 0, cover = null, pollId = 0;
+  // 50ms超の主スレッド占有(long task)を「まだ操作できない」のシグナルとして使う
+  try {
+    new PerformanceObserver(() => { lastBusy = performance.now(); })
+      .observe({ type: 'longtask', buffered: true });
+  } catch (e) {}
+  const FRAME1 =
+    '<svg class="k1" viewBox="0 0 200 200"><defs>' +
+    '<linearGradient id="k1o" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#B3401F"/><stop offset="55%" stop-color="#E8672E"/><stop offset="100%" stop-color="#F7A93C"/></linearGradient>' +
+    '<linearGradient id="k1i" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#F5952E"/><stop offset="100%" stop-color="#FFDD8A"/></linearGradient></defs>' +
+    '<g transform="translate(100,100) scale(1.385) translate(-101,-83)">' +
+    '<path fill="url(#k1o)" d="M100,14 C128,44 154,66 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,58 88,34 100,14 Z"/>' +
+    '<path fill="url(#k1i)" d="M101,72 C112,86 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,92 97,98 102,102 C103,90 100,82 101,72 Z"/></g></svg>';
+  const FRAME2 =
+    '<svg class="k2" viewBox="0 0 200 200"><defs>' +
+    '<linearGradient id="k2o" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#B3401F"/><stop offset="55%" stop-color="#E8672E"/><stop offset="100%" stop-color="#F7A93C"/></linearGradient>' +
+    '<linearGradient id="k2i" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#F5952E"/><stop offset="100%" stop-color="#FFDD8A"/></linearGradient></defs>' +
+    '<g transform="translate(100,100) scale(1.385) translate(-101,-83)">' +
+    '<path fill="url(#k2o)" d="M100,2 C126,36 154,60 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,50 88,22 100,2 Z"/>' +
+    '<path fill="url(#k2i)" d="M101,62 C110,78 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,86 97,90 102,94 C103,78 100,70 101,62 Z"/></g></svg>';
+  const show = () => {
+    if (!cover) {
+      cover = document.createElement('div');
+      cover.id = '__karuLoad';
+      cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:#111;' +
+        'display:flex;align-items:center;justify-content:center';
+      cover.innerHTML =
+        '<style>#__karuLoad svg{position:absolute;inset:0;width:88px;height:88px;' +
+        'animation:__karuFlick .36s steps(1) infinite!important}' +
+        '#__karuLoad .k2{animation-delay:-.18s!important}' +
+        '@keyframes __karuFlick{0%,100%{opacity:1}50%{opacity:0}}</style>' +
+        '<div style="position:relative;width:88px;height:88px">' + FRAME1 + FRAME2 + '</div>';
+    }
+    // document-start時点では<html>(documentElement)がまだ無いことがある。そのままdocumentへ
+    // appendするとカバー自体がドキュメント要素になり、本来のページ構築を壊して
+    // 「カバーを外しても白紙・操作不能」になる → <html>が現れるまでマウントを遅らせる(pollで再試行)
+    if (!cover.parentNode && document.documentElement)
+      document.documentElement.appendChild(cover);
+  };
+  const hide = () => { if (cover) { cover.remove(); cover = null; } };
+  const poll = (myGen, started) => {
+    if (myGen !== gen) return;
+    show(); // documentElementが遅れて現れたページでもここでマウントされる
+    const now = performance.now();
+    if (now - started >= MAX ||
+        (document.readyState !== 'loading' && now - lastBusy >= QUIET)) { hide(); return; }
+    pollId = setTimeout(() => poll(myGen, started), 100);
+  };
+  const begin = resetBusy => {
+    gen++;
+    if (resetBusy) lastBusy = performance.now(); // SPA遷移はクリック時点から計測をやり直す
+    show();
+    clearTimeout(pollId);
+    poll(gen, performance.now());
+  };
+  begin(false); // 初回(本物のナビゲーション)。long taskが無い軽いページは即座に外れる
+
+  // ---- SPA(pushState/replaceState/popstate)遷移。URLが実際に変わった時だけ被いを出し直す ----
+  let lastHref = location.href;
+  const onSoftNav = () => {
+    if (location.href === lastHref) return;
+    lastHref = location.href;
+    begin(true);
+  };
+  for (const fn of ['pushState', 'replaceState']) {
+    const orig = history[fn];
+    history[fn] = function (...args) {
+      const ret = orig.apply(this, args);
+      onSoftNav();
+      return ret;
+    };
+  }
+  addEventListener('popstate', onSoftNav);
+})();
+""";
+
+    /// <summary>
     /// 低スペックマシン偽装。deviceMemory/hardwareConcurrency/saveData を低く見せることで、
     /// 大手サイト(YouTube等)が自主的に軽量動作(プリバッファ削減・装飾簡略化)へ切り替わる。
     /// </summary>
@@ -377,7 +471,7 @@ static class Injections
     const labs = labelsFor(els.length);
     hintBox = document.createElement('div');
     hintBox.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none';
-    hint = { map: new Map(), typed: '', newTab };
+    hint = { map: new Map(), typed: '', newTab, shifted: false };
     els.forEach((pair, i) => {
       const lab = labs[i];
       if (!lab) return;
@@ -407,8 +501,9 @@ static class Injections
     }
     if (!/^[a-zA-Z]$/.test(e.key)) return;
     hint.typed += e.key.toLowerCase();
+    if (e.shiftKey) hint.shifted = true; // ヒント選択中にShiftが押されたら新しいタブで開く
     const hit = hint.map.get(hint.typed);
-    if (hit) { const el = hit.el, nt = hint.newTab; stopHints(); activate(el, nt); return; }
+    if (hit) { const el = hit.el, nt = hint.newTab || hint.shifted; stopHints(); activate(el, nt); return; }
     let alive = 0;
     for (const [lab, v] of hint.map) {
       const ok = lab.startsWith(hint.typed);
@@ -420,7 +515,7 @@ static class Injections
 
   const HELP =
     'j / k : スクロール\nd / u : 半ページ\ngg / G : 先頭 / 末尾\nh / l : 横スクロール\n' +
-    'f / F : リンク選択 (Fは新タブ)\nH / L : 戻る / 進む\nJ / K : 前 / 次のタブ\n' +
+    'f / F : リンク選択 (Fまたは選択中Shiftで新タブ)\nH / L : 戻る / 進む\nJ / K : 前 / 次のタブ\n' +
     't : 新しいタブ\nx / X : タブを閉じる / 復元\no : URL / 検索\n' +
     'Ctrl+Tab : タブ一覧 (j/k+Enter · Ctrl+Wで閉じる)\nr : 再読み込み\n' +
     '> / < : 再生速度 ±0.25\n= : 等速に戻す\n' +

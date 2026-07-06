@@ -36,6 +36,12 @@ public partial class MainWindow : Window
     static readonly Brush StarOffBrush = new SolidColorBrush(Color.FromRgb(0x77, 0x77, 0x77));
     static readonly Brush StarOnBrush = new SolidColorBrush(Color.FromRgb(0xD4, 0x84, 0x5E));
 
+    // ナビゲーション中の炎アニメーション (2フレームを交互表示。クリック直後に「もう始まっている」を伝える)
+    static readonly BitmapImage FlameFrame1 = new(new Uri("pack://application:,,,/karu-flame1.png"));
+    static readonly BitmapImage FlameFrame2 = new(new Uri("pack://application:,,,/karu-flame2.png"));
+    readonly DispatcherTimer _flameTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
+    bool _flameToggle;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -69,7 +75,9 @@ public partial class MainWindow : Window
                 if (_active.View is null) _ = WakeTabAsync(_active); // パーキング休眠からの復帰
                 else
                 {
-                    _active.View.Visibility = Visibility.Visible;
+                    // 読み込み被い表示中はWebViewを出さない(airspaceで被いが隠れてしまうため)
+                    if (LoadingCover.Visibility != Visibility.Visible)
+                        _active.View.Visibility = Visibility.Visible;
                     var c = _active.View.CoreWebView2;
                     if (c?.IsSuspended == true) c.Resume();
                 }
@@ -79,6 +87,63 @@ public partial class MainWindow : Window
         _sleepTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
         _sleepTimer.Tick += (_, _) => MaintainTabs();
         _sleepTimer.Start();
+        _flameTimer.Tick += (_, _) =>
+        {
+            _flameToggle = !_flameToggle;
+            var src = _flameToggle ? FlameFrame2 : FlameFrame1;
+            LoadingFlame.Source = src;
+            TitleBarFlame.Source = src;
+        };
+    }
+
+    // タイトルバーの小さい炎と中央の被いは別々のタイミングで消えるため独立に管理する
+    // (タイトルバー=NavigationStarting〜Completed、被い=NavigationStarting〜ページ側の「落ち着いた」通知)。
+    // アニメーションの時計(_flameTimer)はどちらか一方でも表示中なら回しておく。
+    void UpdateFlameTimerState()
+    {
+        bool anyVisible = TitleBarFlame.Visibility == Visibility.Visible
+            || LoadingCover.Visibility == Visibility.Visible;
+        if (anyVisible && !_flameTimer.IsEnabled) { _flameToggle = false; _flameTimer.Start(); }
+        else if (!anyVisible && _flameTimer.IsEnabled) _flameTimer.Stop();
+    }
+
+    void ShowTitleBarFlame()
+    {
+        if (TitleBarFlame.Visibility == Visibility.Visible) return;
+        TitleBarFlame.Source = _flameToggle ? FlameFrame2 : FlameFrame1;
+        TitleBarFlame.Visibility = Visibility.Visible;
+        UpdateFlameTimerState();
+    }
+
+    void HideTitleBarFlame()
+    {
+        TitleBarFlame.Visibility = Visibility.Collapsed;
+        UpdateFlameTimerState();
+    }
+
+    /// <summary>ページ表示領域の被いを出す。NavigationStartingの瞬間に呼ぶ「もう始まっている」インジケーター。</summary>
+    void ShowContentCover()
+    {
+        // WebView2はネイティブHWNDでWPF要素より常に手前に描画される(airspace問題)ため、
+        // XAMLで上に重ねただけでは被いは見えない。他のオーバーレイと同様にWebView自体を隠す
+        if (_active?.View is not null) _active.View.Visibility = Visibility.Hidden;
+        if (LoadingCover.Visibility == Visibility.Visible) return;
+        LoadingFlame.Source = _flameToggle ? FlameFrame2 : FlameFrame1;
+        LoadingCover.Visibility = Visibility.Visible;
+        UpdateFlameTimerState();
+    }
+
+    /// <summary>被いを下ろして実ページを見せる。ページ側の「落ち着いた」通知 or タイムアウトで呼ぶ。</summary>
+    void HideContentCover()
+    {
+        if (LoadingCover.Visibility == Visibility.Collapsed) return;
+        LoadingCover.Visibility = Visibility.Collapsed;
+        if (!IsOverlayOpen && WindowState != WindowState.Minimized && _active?.View is not null)
+        {
+            _active.View.Visibility = Visibility.Visible;
+            _active.View.Focus();
+        }
+        UpdateFlameTimerState();
     }
 
     async void OnLoaded(object sender, RoutedEventArgs e)
@@ -245,6 +310,7 @@ public partial class MainWindow : Window
             scripts.Add(Injections.TwitchQuality);
         scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality));
         scripts.Add(Injections.Vim);
+        scripts.Add(Injections.PageCover);
         await core.AddScriptToExecuteOnDocumentCreatedAsync(string.Join("\n;\n", scripts));
 
         core.DocumentTitleChanged += (_, _) =>
@@ -277,8 +343,30 @@ public partial class MainWindow : Window
             args.Handled = true;
             await AddTabAsync(args.Uri);
         };
+        // リンクをクリックした瞬間(=ナビゲーション開始)に炎を出して「処理はもう始まっている」ことを伝える。
+        // WPF側の被い(WebView非表示を伴う)はNavigationCompletedまで。それ以降の
+        // 「描画済みに見えるがまだ操作できない」期間はページ内注入のPageCoverが引き継いで覆う
+        // (SPA内遷移もPageCoverがページ内で完結して処理するため、ホスト側の関与は不要)
+        core.NavigationStarting += (_, args) =>
+        {
+            tab.IsLoading = true;
+            if (tab == _active) ShowTitleBarFlame();
+            // 内部生成ページ(スタートページ/mpvプレースホルダー)は一瞬で描画されるので被いは出さない。
+            // 判定は開く側が立てる明示フラグ + URI形式(about:/data:)の両方で行う
+            bool internalPage = tab.SuppressCoverOnce
+                || args.Uri == "about:blank" || args.Uri.StartsWith("data:");
+            tab.SuppressCoverOnce = false;
+            tab.IsCovering = !internalPage;
+            if (tab == _active)
+            {
+                if (tab.IsCovering) ShowContentCover(); else HideContentCover();
+            }
+        };
         core.NavigationCompleted += (_, _) =>
         {
+            tab.IsLoading = false;
+            tab.IsCovering = false;
+            if (tab == _active) { HideTitleBarFlame(); HideContentCover(); }
             // キーボード主体で使うため、読み込み完了時にページへフォーカスを渡す
             if (tab == _active && !IsOverlayOpen) tab.View?.Focus();
         };

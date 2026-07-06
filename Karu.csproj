@@ -22,6 +22,8 @@
 
   <ItemGroup>
     <Resource Include="karu.ico" />
+    <Resource Include="karu-flame1.png" />
+    <Resource Include="karu-flame2.png" />
   </ItemGroup>
 
   <ItemGroup>
