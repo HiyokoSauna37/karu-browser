@@ -24,14 +24,19 @@ public class BookmarkStore
             if (!File.Exists(FilePath)) return;
             var list = JsonSerializer.Deserialize<List<Bookmark>>(File.ReadAllText(FilePath)) ?? new();
             Items.Clear();
-            foreach (var b in list) Items.Add(b);
+            foreach (var b in list)
+            {
+                // 手編集で混入した null 要素や Url 欠落は捨てる (残すと Contains 等で落ちる)
+                if (b?.Url is not { Length: > 0 }) continue;
+                Items.Add(string.IsNullOrEmpty(b.Title) ? b with { Title = b.Url } : b);
+            }
         }
         catch { /* 壊れたファイルは無視して空で開始 */ }
     }
 
     void Save()
     {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(Items.ToList(), JsonOpts)); }
+        try { Paths.AtomicWrite(FilePath, JsonSerializer.Serialize(Items.ToList(), JsonOpts)); }
         catch { }
     }
 

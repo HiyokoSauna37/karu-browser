@@ -21,4 +21,12 @@ static class Paths
         Directory.CreateDirectory(WebDataDir);
         Directory.CreateDirectory(ExtensionsDir);
     }
+
+    /// <summary>一時ファイルへ書いてから置換する。書き込み途中で落ちても既存ファイルを壊さない。</summary>
+    public static void AtomicWrite(string path, string text)
+    {
+        var tmp = path + ".tmp";
+        File.WriteAllText(tmp, text);
+        File.Move(tmp, path, overwrite: true);
+    }
 }

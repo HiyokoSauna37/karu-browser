@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     BrowserTab? _active;
     bool _extensionsLoaded;
     bool _fullscreen;
+    bool _fsFromElement; // 現在の全画面がHTML要素由来か (F11手動と区別し、タブ切替時の自動解除判定に使う)
     WindowState _preFsState = WindowState.Normal;
     DateTime _minimizedAt = DateTime.Now;
 
@@ -111,7 +112,12 @@ public partial class MainWindow : Window
     static string? TabUrl(BrowserTab t)
     {
         if (t.View is null) return t.SleepUrl;
-        try { return t.View.CoreWebView2?.Source; } catch { return t.SleepUrl; }
+        string? url;
+        try { url = t.View.CoreWebView2?.Source; } catch { return t.SleepUrl; }
+        // mpvプレースホルダー(NavigateToString=about:blank)中は元動画のURLを実体として扱う
+        // (これが無いとセッション保存・閉じタブ復元からmpv再生中のタブが消える)
+        if (url == "about:blank" && t.MpvReturnUrl is not null) return t.MpvReturnUrl;
+        return url;
     }
 
     Task<CoreWebView2Environment> GetEnvAsync()
@@ -278,15 +284,26 @@ public partial class MainWindow : Window
         };
         core.WebMessageReceived += (_, args) =>
         {
-            string? cmd = null;
-            try { cmd = args.TryGetWebMessageAsString(); } catch { }
-            if (cmd is not null && cmd.StartsWith("bookmarkGoNew:"))
+            string? raw = null;
+            try { raw = args.TryGetWebMessageAsString(); } catch { }
+            // 注入スクリプト由来の証明としてトークン接頭辞を検証する。
+            // これが無いと任意のページのJSが postMessage('bookmarkGo:...') 等で
+            // 強制ナビゲーションやタブ操作を行えてしまう
+            if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
+            var cmd = raw[(Injections.MessageToken.Length + 1)..];
+            if (cmd.StartsWith("bookmarkGoNew:"))
             {
-                _ = AddTabAsync(cmd[14..]); return;
+                // オーバーレイはページ読み込み後に注入するためトークン窃取の余地が理論上残る。
+                // 実在するお気に入りのURLしか開かないことで、盗めても実害を無くす
+                var url = cmd[14..];
+                if (_bookmarks.Contains(url)) _ = AddTabAsync(url);
+                return;
             }
-            if (cmd is not null && cmd.StartsWith("bookmarkGo:"))
+            if (cmd.StartsWith("bookmarkGo:"))
             {
-                Navigate(tab, cmd[11..]); return;
+                var url = cmd[11..];
+                if (_bookmarks.Contains(url)) Navigate(tab, url);
+                return;
             }
             switch (cmd)
             {
@@ -301,7 +318,13 @@ public partial class MainWindow : Window
                 case "mpvReturn": MpvReturn(tab); break;
             }
         };
-        core.ContainsFullScreenElementChanged += (_, _) => SetFullscreen(core.ContainsFullScreenElement);
+        // 非アクティブタブ(裏で全画面のまま切替済み等)のイベントで窓の状態を動かさない
+        core.ContainsFullScreenElementChanged += (_, _) =>
+        {
+            if (tab != _active) return;
+            _fsFromElement = core.ContainsFullScreenElement;
+            SetFullscreen(core.ContainsFullScreenElement);
+        };
 
         // 「表示しないデータを受信しない」レイヤー:
         //   - Sec-Purpose/Purpose: prefetch が付いた投機的リクエストを遮断 (Prerender2無効化の取りこぼし対策)

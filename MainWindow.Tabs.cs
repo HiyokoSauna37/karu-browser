@@ -37,6 +37,14 @@ public partial class MainWindow
         SetMemoryTarget(tab, low: false);
         // キーボード主体のため、タブ切替時は即ページへフォーカス
         if (!IsOverlayOpen) tab.View?.Focus();
+        // 要素全画面のタブから切替/閉鎖したとき、離脱イベントは飛んでこない(破棄時は特に)ので
+        // ここで新タブの状態に合わせて解除する。F11手動全画面はタブに紐付かないので触らない
+        if (_fullscreen && _fsFromElement)
+        {
+            bool fs = false;
+            try { fs = tab.View?.CoreWebView2?.ContainsFullScreenElement == true; } catch { }
+            if (!fs) { _fsFromElement = false; SetFullscreen(false); }
+        }
         UpdateWindowTitle();
     }
 
@@ -71,8 +79,9 @@ public partial class MainWindow
             {
                 var t = hidden[i];
                 if (t.View is null) continue; // 休眠済み
-                var core = t.View.CoreWebView2;
-                if (core is null) continue;   // 初期化中
+                CoreWebView2? core = null;
+                try { core = t.View.CoreWebView2; } catch { } // ループ中のawaitの間に閉じられた
+                if (core is null) continue;   // 初期化中 or 破棄済み
                 if (core.IsDocumentPlayingAudio) continue; // BGM再生中のタブは絶対に触らない
 
                 double idleSec = (now - t.HiddenAt).TotalSeconds;
@@ -106,8 +115,9 @@ public partial class MainWindow
             {
                 foreach (var t in Tabs.ToList())
                 {
-                    var c = t.View?.CoreWebView2;
-                    if (t.View is null || c is null || c.IsDocumentPlayingAudio) continue;
+                    CoreWebView2? c = null;
+                    try { c = t.View?.CoreWebView2; } catch { }
+                    if (c is null || c.IsDocumentPlayingAudio) continue;
                     if (!c.IsSuspended) await CaptureVideoPosAsync(t);
                     HibernateTab(t, allowActive: true);
                 }
@@ -201,6 +211,9 @@ public partial class MainWindow
         {
             WebHost.Children.Remove(tab.View);
             try { tab.View.Dispose(); } catch { }
+            // View を null にしておかないと、MaintainTabs のループが await 中に閉じたタブを
+            // 「生きているタブ」としてスナップショットから触り ObjectDisposedException になる
+            tab.Detach(null, 0);
         }
         // 最後のタブを閉じてもアプリは終了せず、新しいスタートページを開く (終了は Ctrl+Shift+W か ✕)
         if (Tabs.Count == 0) { _ = AddTabAsync(null); return; }

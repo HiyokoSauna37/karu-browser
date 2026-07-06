@@ -126,7 +126,7 @@ static class StartPage
   <div class="msg">mpv で再生中 — ブラウザ側はメモリ解放済み</div>
   <div class="hint">クリックでページに戻る</div>
   <script>document.body.addEventListener('click', () => {
-    try { window.chrome.webview.postMessage('mpvReturn'); } catch (e) {}
+    try { window.chrome.webview.postMessage('{{Injections.MessageToken}}|mpvReturn'); } catch (e) {}
   });</script>
 </body>
 </html>

@@ -45,6 +45,6 @@ static class SettingsStore
 
     public static void Save(AppSettings s)
     {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(s)); } catch { }
+        try { Paths.AtomicWrite(FilePath, JsonSerializer.Serialize(s)); } catch { }
     }
 }

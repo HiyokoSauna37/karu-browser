@@ -19,7 +19,7 @@ static class SessionStore
 
     public static void Save(IEnumerable<string> urls)
     {
-        try { File.WriteAllText(FilePath, JsonSerializer.Serialize(urls.ToArray())); }
+        try { Paths.AtomicWrite(FilePath, JsonSerializer.Serialize(urls.ToArray())); }
         catch { }
     }
 }

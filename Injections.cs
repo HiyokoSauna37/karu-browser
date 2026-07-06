@@ -3,6 +3,15 @@ namespace Karu;
 static class Injections
 {
     /// <summary>
+    /// 注入スクリプト→ホストの postMessage コマンド認証トークン (起動ごとに変わる)。
+    /// WebView2の WebMessageReceived は送信元スクリプトを区別できないため、ページ自身のJSが
+    /// 'tabClose' 等を偽装send してタブ操作や強制ナビゲーションを行うのを、この接頭辞の検証で防ぐ。
+    /// document-start 注入(Vim層)は postMessage の参照をページスクリプト実行前に捕獲するので、
+    /// ページ側がpostMessageをフックしてもトークンは漏れない。
+    /// </summary>
+    public static readonly string MessageToken = Guid.NewGuid().ToString("N");
+
+    /// <summary>
     /// 低スペックマシン偽装。deviceMemory/hardwareConcurrency/saveData を低く見せることで、
     /// 大手サイト(YouTube等)が自主的に軽量動作(プリバッファ削減・装飾簡略化)へ切り替わる。
     /// </summary>
@@ -224,7 +233,9 @@ static class Injections
 
     /// <summary>ブックマーク一覧オーバーレイ。{0} に JSON 配列 [{title,url},...] を埋め込む。
     /// キー=直接開く / j·k(↑↓)=選択移動 / Enter=選択を開く / Shift併用=新しいタブ。</summary>
-    public const string BookmarkOverlay = """
+    public static string BookmarkOverlay => BookmarkOverlaySrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
+
+    const string BookmarkOverlaySrc = """
 (function(){
   if(document.getElementById('__karuBM')) return;
   var bm = {0};
@@ -283,7 +294,7 @@ static class Injections
   function close(){ bg.remove(); document.removeEventListener('keydown',onKey,true); }
   function go(url, newTab){
     close();
-    try{window.chrome.webview.postMessage((newTab?'bookmarkGoNew:':'bookmarkGo:')+url);}catch(e){}
+    try{window.chrome.webview.postMessage('__KARU_MSG_TOKEN__|'+(newTab?'bookmarkGoNew:':'bookmarkGo:')+url);}catch(e){}
   }
   function onKey(e){
     e.preventDefault(); e.stopImmediatePropagation();
@@ -311,12 +322,20 @@ static class Injections
     /// 重複するが、動画を見ていないとき(検索結果・チャンネルページ等)もKaruの操作性を優先するため、
     /// YouTube上でも常にKaru側が優先する(意図的な選択。無効化はしない)。
     /// </summary>
-    public const string Vim = """
+    public static string Vim => VimSrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
+
+    const string VimSrc = """
 (() => {
   if (window.__karuVim) return;
   window.__karuVim = 1;
 
-  const send = c => { try { window.chrome.webview.postMessage(c); } catch (e) {} };
+  // document-start時点の postMessage を閉包に捕獲 (ページによる後からのフック/すり替えを無効化)
+  const send = (() => {
+    try {
+      const f = window.chrome.webview.postMessage.bind(window.chrome.webview);
+      return c => { try { f('__KARU_MSG_TOKEN__|' + c); } catch (e) {} };
+    } catch (e) { return () => {}; }
+  })();
   const SCROLL = 80;
   let hint = null, hintBox = null, lastKey = '', lastT = 0, helpBox = null;
 
