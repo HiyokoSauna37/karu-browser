@@ -1,12 +1,17 @@
 <p align="right"><b>English</b> | <a href="README.ja.md">日本語</a></p>
 
 <p align="center">
-  <img src="karu.preview.png" width="120" alt="Karu logo">
+  <img src="assets/banner.png" width="430" alt="Karu">
 </p>
 
-<h1 align="center">Karu</h1>
-
 <p align="center">A lightweight, keyboard-first Windows browser built for watching video without your RAM disappearing.</p>
+
+<p align="center">
+  <a href="../../releases"><img src="https://img.shields.io/github/v/release/HiyokoSauna37/karu-browser?label=release&color=E8672E" alt="Latest release"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4" alt="Platform: Windows 10/11">
+  <img src="https://img.shields.io/badge/.NET-8.0-512BD4" alt=".NET 8">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-97CA00" alt="License: MIT"></a>
+</p>
 
 ---
 
@@ -81,7 +86,7 @@ Download the latest zip from [Releases](../../releases), extract it anywhere, an
 ## Build from source
 
 ```
-dotnet publish Karu.csproj -c Release -o dist
+dotnet publish src/Karu.csproj -c Release -o dist
 ```
 
 The result is a framework-dependent build in `dist/` (requires the .NET 8 Desktop Runtime on the target machine).

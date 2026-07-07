@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="outer" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#B3401F"/>
+      <stop offset="55%" stop-color="#E8672E"/>
+      <stop offset="100%" stop-color="#F7A93C"/>
+    </linearGradient>
+    <linearGradient id="inner" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#F5952E"/>
+      <stop offset="100%" stop-color="#FFDD8A"/>
+    </linearGradient>
+    <linearGradient id="word" gradientUnits="userSpaceOnUse" x1="0" y1="180" x2="0" y2="350">
+      <stop offset="0%" stop-color="#F7A93C"/>
+      <stop offset="100%" stop-color="#E8672E"/>
+    </linearGradient>
+    <radialGradient id="bg" cx="0.5" cy="0.42" r="0.9">
+      <stop offset="0%" stop-color="#251a2b"/>
+      <stop offset="100%" stop-color="#130e17"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g transform="translate(-38,110) scale(0.85)">
+    <g transform="translate(360,30) scale(1.7)">
+      <g transform="translate(100,100) scale(1.385) translate(-101,-83)">
+        <path fill="url(#outer)" d="
+          M100,14
+          C128,44 154,66 154,104
+          C154,128 142,144 128,152
+          C134,138 132,120 118,108
+          C120,126 112,142 96,150
+          C70,146 48,126 48,100
+          C48,76 62,56 76,42
+          C72,58 74,74 86,84
+          C86,58 88,34 100,14
+          Z"/>
+        <path fill="url(#inner)" d="
+          M101,72
+          C112,86 122,98 121,116
+          C120,130 110,140 99,142
+          C88,140 78,129 78,115
+          C78,102 86,92 93,82
+          C94,92 97,98 102,102
+          C103,90 100,82 101,72
+          Z"/>
+      </g>
+    </g>
+    <text x="690" y="285" font-family="Segoe UI" font-weight="700" font-size="230" fill="url(#word)">Karu</text>
+  </g>
+  <text x="640" y="510" text-anchor="middle" font-family="Segoe UI" font-size="40" fill="#b0a8bd">A lightweight, keyboard-first browser for Windows</text>
+</svg>

@@ -1,12 +1,17 @@
 <p align="right"><a href="README.md">English</a> | <b>日本語</b></p>
 
 <p align="center">
-  <img src="karu.preview.png" width="120" alt="Karu logo">
+  <img src="assets/banner.png" width="430" alt="Karu">
 </p>
 
-<h1 align="center">Karu</h1>
-
 <p align="center">動画を見てもメモリが溶けない、キーボード操作前提の軽量Windowsブラウザ。</p>
+
+<p align="center">
+  <a href="../../releases"><img src="https://img.shields.io/github/v/release/HiyokoSauna37/karu-browser?label=release&color=E8672E" alt="最新リリース"></a>
+  <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4" alt="対応OS: Windows 10/11">
+  <img src="https://img.shields.io/badge/.NET-8.0-512BD4" alt=".NET 8">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-97CA00" alt="ライセンス: MIT"></a>
+</p>
 
 ---
 
@@ -81,7 +86,7 @@ Chromium系ブラウザはメモリを大量に消費しますが、世に出回
 ## ソースからビルド
 
 ```
-dotnet publish Karu.csproj -c Release -o dist
+dotnet publish src/Karu.csproj -c Release -o dist
 ```
 
 `dist/` にフレームワーク依存ビルドが出力されます（実行先マシンに.NET 8 デスクトップランタイムが必要です）。
