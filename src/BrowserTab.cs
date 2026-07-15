@@ -12,7 +12,7 @@ namespace Karu;
 /// </summary>
 public class BrowserTab : INotifyPropertyChanged
 {
-    /// <summary>実体のWebView。休眠中は null。</summary>
+    /// <summary>実体のWebView。休眠中と Attach 前は null。</summary>
     public WebView2? View { get; private set; }
 
     /// <summary>このタブが非アクティブになった時刻。サスペンド/休眠判定に使う。</summary>
@@ -31,8 +31,6 @@ public class BrowserTab : INotifyPropertyChanged
     public string? MpvReturnUrl;
     public double MpvReturnPos;
 
-    public BrowserTab(WebView2 view) => View = view;
-
     /// <summary>休眠中かどうか。タブUIの表示(半透明化)にもバインドされる。</summary>
     public bool IsAsleep => View is null;
 
@@ -45,7 +43,7 @@ public class BrowserTab : INotifyPropertyChanged
         OnChanged(nameof(IsAsleep));
     }
 
-    /// <summary>新しいWebViewを割り当てて休眠から復帰する。</summary>
+    /// <summary>新しいWebViewを割り当てる(新規タブの初回装着と休眠からの復帰)。</summary>
     public void Attach(WebView2 view)
     {
         View = view;

@@ -17,6 +17,37 @@ public partial class MainWindow
 {
     bool _maintaining;
 
+    static WebView2 NewView() => new()
+    {
+        DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 0x11, 0x11, 0x11),
+    };
+
+    /// <summary>新しいタブを開いてアクティブにする(url が null ならスタートページ)。
+    /// キー操作・Vim層・NewWindowRequested・各オーバーレイ・復元系、すべての「新しいタブで開く」がここに集まる。</summary>
+    async Task<BrowserTab> AddTabAsync(string? url)
+    {
+        var tab = new BrowserTab();
+        Tabs.Add(tab);
+        var mount = MountViewAsync(tab); // 同期部で View が付くので、直後の ActivateTab は休眠復帰と誤認しない
+        ActivateTab(tab);
+        var core = await mount;
+        if (core is null) return tab;
+        if (url is null) ShowStartPage(tab);
+        else Navigate(tab, url);
+        return tab;
+    }
+
+    /// <summary>タブへ新しい WebView を生成・装着して初期化する(新規タブと休眠復帰の共通部)。
+    /// 初期化完了前にタブが閉じられた場合は null を返す。</summary>
+    async Task<CoreWebView2?> MountViewAsync(BrowserTab tab)
+    {
+        var view = NewView();
+        tab.Attach(view);
+        WebHost.Children.Add(view);
+        view.Visibility = tab == _active ? Visibility.Visible : Visibility.Hidden;
+        return await InitCoreAsync(tab, view);
+    }
+
     void ActivateTab(BrowserTab tab)
     {
         if (_active is not null && _active != tab)
@@ -166,14 +197,9 @@ public partial class MainWindow
     /// <summary>休眠タブを復帰させる。WebViewを再生成し、URLを開き直して動画位置へシークする。</summary>
     async Task WakeTabAsync(BrowserTab tab)
     {
-        var url = tab.SleepUrl;
+        var url = tab.SleepUrl;   // Attach で消える前に読む
         var pos = tab.SleepVideoPos;
-        var view = NewView();
-        tab.Attach(view);
-        WebHost.Children.Add(view);
-        view.Visibility = tab == _active ? Visibility.Visible : Visibility.Hidden;
-
-        var core = await InitCoreAsync(tab, view);
+        var core = await MountViewAsync(tab);
         if (core is null) return;
         if (url is null) { ShowStartPage(tab); return; }
         if (pos > 5) HookResumeSeek(core, pos);

@@ -224,27 +224,6 @@ public partial class MainWindow : Window
         catch { }
     }
 
-    static WebView2 NewView() => new()
-    {
-        DefaultBackgroundColor = System.Drawing.Color.FromArgb(255, 0x11, 0x11, 0x11),
-    };
-
-    async Task<BrowserTab> AddTabAsync(string? url)
-    {
-        var view = NewView();
-        var tab = new BrowserTab(view);
-        Tabs.Add(tab);
-        WebHost.Children.Add(view);
-        ActivateTab(tab);
-
-        var core = await InitCoreAsync(tab, view);
-        if (core is null) return tab;
-
-        if (url is null) ShowStartPage(tab);
-        else Navigate(tab, url);
-        return tab;
-    }
-
     /// <summary>WebView2の初期化と全イベント配線。新規タブと休眠復帰の両方から使う。
     /// 環境生成の失敗はここから throw され、OnLoaded 側で表示される。</summary>
     async Task<CoreWebView2?> InitCoreAsync(BrowserTab tab, WebView2 view)
@@ -329,42 +308,7 @@ public partial class MainWindow : Window
             // キーボード主体で使うため、読み込み完了時にページへフォーカスを渡す
             if (tab == _active && !IsOverlayOpen) tab.View?.Focus();
         };
-        core.WebMessageReceived += (_, args) =>
-        {
-            string? raw = null;
-            try { raw = args.TryGetWebMessageAsString(); } catch { }
-            // 注入スクリプト由来の証明としてトークン接頭辞を検証する。
-            // これが無いと任意のページのJSが postMessage('bookmarkGo:...') 等で
-            // 強制ナビゲーションやタブ操作を行えてしまう
-            if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
-            var cmd = raw[(Injections.MessageToken.Length + 1)..];
-            if (cmd.StartsWith("bookmarkGoNew:"))
-            {
-                // オーバーレイはページ読み込み後に注入するためトークン窃取の余地が理論上残る。
-                // 実在するお気に入りのURLしか開かないことで、盗めても実害を無くす
-                var url = cmd[14..];
-                if (_bookmarks.Contains(url)) _ = AddTabAsync(url);
-                return;
-            }
-            if (cmd.StartsWith("bookmarkGo:"))
-            {
-                var url = cmd[11..];
-                if (_bookmarks.Contains(url)) Navigate(tab, url);
-                return;
-            }
-            switch (cmd)
-            {
-                case "tabClose": CloseTab(tab); break;
-                case "tabRestore": RestoreClosedTab(); break;
-                case "tabNext": CycleTab(1); break;
-                case "tabPrev": CycleTab(-1); break;
-                case "tabNew": _ = AddTabAsync(null); break;
-                case "focusUrl": ShowUrlOverlay(); break;
-                case "tabList": ShowTabOverlay(); break;
-                case "bookmarkList": ShowBookmarkOverlay(tab); break;
-                case "mpvReturn": MpvReturn(tab); break;
-            }
-        };
+        core.WebMessageReceived += (_, args) => OnWebMessage(tab, args);
         // 非アクティブタブ(裏で全画面のまま切替済み等)のイベントで窓の状態を動かさない
         core.ContainsFullScreenElementChanged += (_, _) =>
         {
@@ -413,6 +357,45 @@ public partial class MainWindow : Window
                 core.AddWebResourceRequestedFilter("*", ctx);
 
         return core;
+    }
+
+    /// <summary>注入スクリプト(Vim層・ブックマークオーバーレイ)からのタブ操作コマンドを処理する。</summary>
+    void OnWebMessage(BrowserTab tab, CoreWebView2WebMessageReceivedEventArgs args)
+    {
+        string? raw = null;
+        try { raw = args.TryGetWebMessageAsString(); } catch { }
+        // 注入スクリプト由来の証明としてトークン接頭辞を検証する。
+        // これが無いと任意のページのJSが postMessage('bookmarkGo:...') 等で
+        // 強制ナビゲーションやタブ操作を行えてしまう
+        if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
+        var cmd = raw[(Injections.MessageToken.Length + 1)..];
+        const string goNew = "bookmarkGoNew:", go = "bookmarkGo:";
+        if (cmd.StartsWith(goNew))
+        {
+            // オーバーレイはページ読み込み後に注入するためトークン窃取の余地が理論上残る。
+            // 実在するお気に入りのURLしか開かないことで、盗めても実害を無くす
+            var url = cmd[goNew.Length..];
+            if (_bookmarks.Contains(url)) _ = AddTabAsync(url);
+            return;
+        }
+        if (cmd.StartsWith(go))
+        {
+            var url = cmd[go.Length..];
+            if (_bookmarks.Contains(url)) Navigate(tab, url);
+            return;
+        }
+        switch (cmd)
+        {
+            case "tabClose": CloseTab(tab); break;
+            case "tabRestore": RestoreClosedTab(); break;
+            case "tabNext": CycleTab(1); break;
+            case "tabPrev": CycleTab(-1); break;
+            case "tabNew": _ = AddTabAsync(null); break;
+            case "focusUrl": ShowUrlOverlay(); break;
+            case "tabList": ShowTabOverlay(); break;
+            case "bookmarkList": ShowBookmarkOverlay(tab); break;
+            case "mpvReturn": MpvReturn(tab); break;
+        }
     }
 
     async void OnPreviewKeyDown(object sender, KeyEventArgs e)
