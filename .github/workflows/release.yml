@@ -21,7 +21,11 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Publish
-        run: dotnet publish src/Karu.csproj -c Release -o dist
+        shell: pwsh
+        run: |
+          # exe/dll のバージョンメタデータをタグ名から焼き込む (v0.2.0 → 0.2.0)
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          dotnet publish src/Karu.csproj -c Release -o dist -p:Version=$ver
 
       - name: Package
         shell: pwsh
