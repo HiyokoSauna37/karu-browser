@@ -34,7 +34,7 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 - **Keyboard-driven tab list** (`Ctrl+Tab`) and **bookmark list** (`b`) — both support `j/k` + `Enter` to select, and toggle closed by pressing the same key again.
 - **YouTube-focused tuning** — in-player ad skipping, playback quality cap, forced H.264 (avoids VP9/AV1 decode cost), a "focus mode" that hides comments/related/shorts shelves, and an on-player speed button.
 - **[mpv](https://mpv.io/) handoff** (`Ctrl+M`) — plays the current video in mpv (via yt-dlp) and collapses the page to a lightweight placeholder once playback is confirmed, keeping playback position for switching back.
-- **Translate the page** (`Ctrl+Shift+Y`) — like Chrome's "Translate this page": rewrites the body into Japanese in place; press again to flip back to the original (translation ⇄ original toggle, cached so it's instant).
+- **Translate the page** (`Ctrl+Shift+Y`) — like Chrome's "Translate this page": rewrites the body into Japanese in place; press again to flip back (translation ⇄ original toggle). Links and `<code>` are kept intact and repositioned to the correct Japanese word order. See [Translating pages](#translating-pages).
 - **Pop a tab into its own window** (`Ctrl+Shift+D`) — moves the current tab into a new window, for side-by-side viewing.
 - **Presents as a normal browser** — hides `navigator.webdriver` and scopes the low-spec spoof to YouTube only, so bot checks like Cloudflare are less likely to flag it as automated.
 - **Ad/tracker blocking** — either a built-in domain blocklist, or sideload uBlock Origin's unpacked extension (Karu injects its content scripts manually, since WebView2 doesn't run extension content scripts on its own).
@@ -74,6 +74,14 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 | `F7` | Toggle caret browsing (restarts app) |
 | `F11` | Toggle window fullscreen |
 | `Ctrl+Shift+W` | Quit |
+
+## Translating pages
+
+`Ctrl+Shift+Y` (or the top-right `≡` menu) rewrites the page into Japanese, like Chrome's "Translate this page". Press it again to flip back — it's a translation ⇄ original toggle, and re-translating/restoring is instant (cached).
+
+Rather than translating each text run on its own, it translates block by block with inline elements (links, `<code>`, …) swapped for placeholders. That way **links and code keep their contents and get repositioned to the correct Japanese word order** (code contents are left untranslated). Translating text nodes individually would scramble the word order of a sentence split across a link and misplace the link — this avoids that.
+
+It uses Google Translate's free endpoint (no API key; the request runs on the app side). Being unofficial, very large pages can hit rate limits (any leftover text stays in the original language).
 
 ## Requirements
 
