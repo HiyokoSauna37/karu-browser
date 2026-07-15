@@ -613,10 +613,11 @@ public partial class MainWindow
         CloseTab(tab); // 新ウィンドウを起動してから元タブを閉じる
     }
 
-    // ---- ページ翻訳 (Alt+Shift+T / メニュー。「このページを翻訳」相当) ----
+    // ---- ページ翻訳 (Ctrl+Shift+Y / メニュー。「このページを翻訳」相当) ----
 
     record TransState(bool Exists, string Shown, bool HasTranslated);
     static readonly JsonSerializerOptions TransJsonOpts = new() { PropertyNameCaseInsensitive = true };
+    readonly HashSet<BrowserTab> _translating = new(); // 翻訳中の再トグルを無視する(適用と復元の競合防止)
 
     void Translate_Click(object sender, RoutedEventArgs e)
     {
@@ -632,11 +633,13 @@ public partial class MainWindow
 
     /// <summary>ページ翻訳のトグル。1回目=本文を日本語へ in-place 翻訳、2回目=原文へ戻す
     /// (再翻訳・復元はキャッシュ利用でネットワーク不要)。ネットワーク(gtx)はホスト側 HttpClient で
-    /// 行い(ページ内 fetch は CORS で弾かれるため)、DOM 走査・置換は注入 JS に任せる。</summary>
+    /// 行い(ページ内 fetch は CORS で弾かれるため)、DOM 走査・置換は注入 JS に任せる。
+    /// 翻訳は届いたバッチから順次適用し、最後に全訳文で確定適用する(訳キャッシュもそこで確定)。</summary>
     async Task TranslatePageToggleAsync(BrowserTab tab)
     {
         var core = tab.View?.CoreWebView2;
         if (core is null) return;
+        if (!_translating.Add(tab)) return;
         try
         {
             var stateJson = await core.ExecuteScriptAsync(Injections.TranslateState);
@@ -653,14 +656,25 @@ public partial class MainWindow
                 await core.ExecuteScriptAsync(Injections.TranslateReapply);
                 return;
             }
-            // 新規翻訳: テキストノードを集める → gtx で翻訳 → 適用してキャッシュ
+            // 新規翻訳: テキストノードを集める → gtx で並列翻訳 → 届いたバッチから順次適用
             var segsJson = await core.ExecuteScriptAsync(Injections.TranslateCollect);
             var segs = JsonSerializer.Deserialize<string[]>(segsJson) ?? Array.Empty<string>();
             if (segs.Length == 0) return;
-            var (translations, _, _) = await Translator.TranslateAsync(segs, "ja");
-            var transJson = JsonSerializer.Serialize(translations);
-            await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},\"\")");
+            async Task ApplyAsync(string[] cur)
+            {
+                var transJson = JsonSerializer.Serialize(cur);
+                await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},\"\")");
+            }
+            var throttle = Stopwatch.StartNew();
+            var (translations, _, _) = await Translator.TranslateAsync(segs, "ja", onProgress: cur =>
+            {
+                if (throttle.ElapsedMilliseconds < 350) return Task.CompletedTask; // 適用は DOM 全体の組み直しなので間引く
+                throttle.Restart();
+                return ApplyAsync(cur);
+            });
+            await ApplyAsync(translations);
         }
         catch { }
+        finally { _translating.Remove(tab); }
     }
 }
