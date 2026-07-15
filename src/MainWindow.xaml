@@ -266,6 +266,10 @@
                     <Button Style="{StaticResource MenuItemButton}"
                             Content="この動画を mpv で再生 — 超軽量 (Ctrl+M)" Click="Mpv_Click"/>
                     <Button Style="{StaticResource MenuItemButton}"
+                            Content="このページを翻訳 — 日本語⇄原文トグル (Ctrl+Shift+Y)" Click="Translate_Click"/>
+                    <Button Style="{StaticResource MenuItemButton}"
+                            Content="このタブを別ウィンドウへ分離 (Ctrl+Shift+D)" Click="Detach_Click"/>
+                    <Button Style="{StaticResource MenuItemButton}"
                             Content="このページを Edge で開く — DRM動画用 (Ctrl+E)" Click="OpenEdge_Click"/>
                     <Button Style="{StaticResource MenuItemButton}"
                             Content="テキストカーソルモード切替 (F7・要再起動)" Click="Caret_Click"/>

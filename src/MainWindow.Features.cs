@@ -595,4 +595,72 @@ public partial class MainWindow
             "Karu", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (r == MessageBoxResult.Yes) RestartApp();
     }
+
+    // ---- タブの別ウィンドウ分離 (Alt+Shift+D) ----
+
+    /// <summary>現在のタブを新しいウィンドウ(別プロセス)へ分離する。
+    /// WebView2 には既存タブを別ウィンドウへ移す API が無いため、そのタブの URL で新しい Karu を
+    /// 起動し(同じ WebDataDir を同時共有できるのは実測確認済み)、元タブを閉じる。引き継ぐのは URL のみ
+    /// (ページ内の入力・履歴・スクロール位置は失われる)。</summary>
+    void DetachTab(BrowserTab tab)
+    {
+        var url = TabUrl(tab);
+        if (string.IsNullOrEmpty(url) || url == "about:blank") return; // 中身の無いタブは分離しない
+        var exe = Environment.ProcessPath;
+        if (exe is null) return;
+        try { Process.Start(new ProcessStartInfo(exe, $"\"{url}\"") { UseShellExecute = true }); }
+        catch { return; }
+        CloseTab(tab); // 新ウィンドウを起動してから元タブを閉じる
+    }
+
+    // ---- ページ翻訳 (Alt+Shift+T / メニュー。「このページを翻訳」相当) ----
+
+    record TransState(bool Exists, string Shown, bool HasTranslated);
+    static readonly JsonSerializerOptions TransJsonOpts = new() { PropertyNameCaseInsensitive = true };
+
+    void Translate_Click(object sender, RoutedEventArgs e)
+    {
+        MenuPopup.IsOpen = false;
+        if (_active is not null) _ = TranslatePageToggleAsync(_active);
+    }
+
+    void Detach_Click(object sender, RoutedEventArgs e)
+    {
+        MenuPopup.IsOpen = false;
+        if (_active is not null) DetachTab(_active);
+    }
+
+    /// <summary>ページ翻訳のトグル。1回目=本文を日本語へ in-place 翻訳、2回目=原文へ戻す
+    /// (再翻訳・復元はキャッシュ利用でネットワーク不要)。ネットワーク(gtx)はホスト側 HttpClient で
+    /// 行い(ページ内 fetch は CORS で弾かれるため)、DOM 走査・置換は注入 JS に任せる。</summary>
+    async Task TranslatePageToggleAsync(BrowserTab tab)
+    {
+        var core = tab.View?.CoreWebView2;
+        if (core is null) return;
+        try
+        {
+            var stateJson = await core.ExecuteScriptAsync(Injections.TranslateState);
+            var st = JsonSerializer.Deserialize<TransState>(stateJson, TransJsonOpts);
+            // 翻訳表示中 → 原文へ戻す
+            if (st is { Exists: true, Shown: "translated" })
+            {
+                await core.ExecuteScriptAsync(Injections.TranslateRestore);
+                return;
+            }
+            // 原文表示 + 訳キャッシュ有り → ネットワーク無しで再適用
+            if (st is { Exists: true, Shown: "original", HasTranslated: true })
+            {
+                await core.ExecuteScriptAsync(Injections.TranslateReapply);
+                return;
+            }
+            // 新規翻訳: テキストノードを集める → gtx で翻訳 → 適用してキャッシュ
+            var segsJson = await core.ExecuteScriptAsync(Injections.TranslateCollect);
+            var segs = JsonSerializer.Deserialize<string[]>(segsJson) ?? Array.Empty<string>();
+            if (segs.Length == 0) return;
+            var (translations, _, _) = await Translator.TranslateAsync(segs, "ja");
+            var transJson = JsonSerializer.Serialize(translations);
+            await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},\"\")");
+        }
+        catch { }
+    }
 }

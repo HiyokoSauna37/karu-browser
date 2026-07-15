@@ -127,9 +127,15 @@ static class Injections
     /// <summary>
     /// 低スペックマシン偽装。deviceMemory/hardwareConcurrency/saveData を低く見せることで、
     /// 大手サイト(YouTube等)が自主的に軽量動作(プリバッファ削減・装飾簡略化)へ切り替わる。
+    ///
+    /// **YouTube 限定にしている**: この偽装は navigator プロパティを非ネイティブ getter で上書きするため、
+    /// 全サイトに当てると Cloudflare 等のボット判定が「改ざんされたブラウザ」と見なして弾く材料になる
+    /// (getter の toString がネイティブでない・値が不整合、が検知される)。効果があるのは主に YouTube なので、
+    /// そこだけに絞って他サイトでは素の navigator を見せる。
     /// </summary>
     public const string LowSpec = """
 (() => {
+  if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   const def = (o, k, v) => { try { Object.defineProperty(o, k, { get: () => v, configurable: true }); } catch (e) {} };
   def(Navigator.prototype, 'deviceMemory', 2);
   def(Navigator.prototype, 'hardwareConcurrency', 2);
@@ -138,6 +144,161 @@ static class Injections
     if (c) def(Object.getPrototypeOf(c), 'saveData', true);
   } catch (e) {}
 })();
+""";
+
+    /// <summary>
+    /// ページ翻訳(「このページを翻訳」相当)の DOM 側ヘルパー。ホストから ExecuteScriptAsync で
+    /// 必要時だけ呼ぶ(document-start 注入はしない = 通常閲覧に負荷を足さない)。
+    ///
+    /// **ブロック単位 + インライン要素のプレースホルダ方式**(Chrome 相当): テキストノードを個別に
+    /// 訳すと、リンクや &lt;code&gt; で文が分断されたとき語順が崩れる(日本語は語順が変わるのに断片の
+    /// 位置が固定されるため)。そこで「葉ブロック」(ブロック子を持たない要素)ごとに、インライン子要素を
+    /// {0} のようなトークンに置換した文字列を丸ごと翻訳する。gtx はこのトークンを保持したまま正しい語順へ
+    /// 再配置するので、訳文中のトークン位置へ元の要素(リンク等)を戻せば整合する。トグル/復元は
+    /// 葉ブロックの innerHTML スナップショット(原文/訳文)を差し替えるだけ。
+    /// </summary>
+
+    /// <summary>現在の翻訳状態を JSON で返す ({exists, shown, hasTranslated})。</summary>
+    public const string TranslateState = """
+(() => {
+  const st = window.__karuTrans;
+  return st
+    ? { exists: true, shown: st.shown, hasTranslated: Array.isArray(st.transHTML) && st.transHTML.length > 0 }
+    : { exists: false, shown: '', hasTranslated: false };
+})()
+""";
+
+    /// <summary>葉ブロックとインライン要素からプレースホルダ入りテンプレートを作り、翻訳対象文字列の配列を返す。</summary>
+    public const string TranslateCollect = """
+(() => {
+  const INLINE = new Set(['A','ABBR','B','BDI','BDO','CITE','CODE','DATA','DFN','EM','I','KBD','MARK','Q','RP','RT','RUBY','S','SAMP','SMALL','SPAN','STRONG','SUB','SUP','TIME','U','VAR','WBR','FONT','TT','INS','DEL','BIG','LABEL','OUTPUT']);
+  const CODEISH = new Set(['CODE','KBD','SAMP','VAR','TT']);
+  const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','TEXTAREA','PRE','SVG','CANVAS']);
+  const isInline = el => INLINE.has(el.tagName);
+  if (!document.body) return [];
+
+  // 葉ブロック = 非インライン要素で、要素の子がすべてインライン(=ブロック子を持たない)、かつ非空白テキストを含む
+  const leafEls = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    if (isInline(el) || SKIP.has(el.tagName)) continue;
+    let allInline = true;
+    for (const c of el.children) { if (!isInline(c) && !SKIP.has(c.tagName)) { allInline = false; break; } }
+    if (!allInline) continue;
+    if (!el.textContent || !el.textContent.trim()) continue;
+    leafEls.push(el);
+  }
+
+  // ユニット = {el, tmpl, childElems}。葉ブロックとその中の非コードのインライン要素を再帰的に作る。
+  // tmpl は空白を1つに畳む(HTML の描画と等価。改行が残ると翻訳のバッチ整列が崩れるため)。
+  const units = [];
+  const makeUnit = (el) => {
+    let tmpl = '';
+    const childElems = [];
+    for (const node of el.childNodes) {
+      if (node.nodeType === 3) { tmpl += node.nodeValue; }
+      else if (node.nodeType === 1) {
+        if (isInline(node) && !SKIP.has(node.tagName)) {
+          const k = childElems.length;
+          childElems.push(node);
+          tmpl += '{' + k + '}';
+          if (!CODEISH.has(node.tagName) && node.textContent && node.textContent.trim()) makeUnit(node);
+        } else {
+          tmpl += node.textContent || ''; // 想定外のブロック子等はテキスト平坦化(取りこぼし防止)
+        }
+      }
+    }
+    units.push({ el, tmpl: tmpl.replace(/\s+/g, ' '), childElems });
+  };
+  const origHTML = leafEls.map(el => el.innerHTML);
+  for (const el of leafEls) makeUnit(el);
+
+  // 葉ブロックに含まれない裸テキスト(混在コンテナ直下)は個別翻訳(orphan)にフォールバック
+  const leafSet = new Set(leafEls);
+  const inLeaf = (n) => { let p = n.parentElement; while (p) { if (leafSet.has(p)) return true; p = p.parentElement; } return false; };
+  const orphans = [];
+  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let tn;
+  while ((tn = w.nextNode())) {
+    if (!tn.nodeValue || !tn.nodeValue.trim()) continue;
+    const pe = tn.parentElement;
+    if (pe && (SKIP.has(pe.tagName) || CODEISH.has(pe.tagName))) continue;
+    if (inLeaf(tn)) continue;
+    orphans.push({ node: tn, orig: tn.nodeValue });
+  }
+
+  window.__karuTrans = { units, leafEls, origHTML, transHTML: null, orphans, shown: 'original' };
+  // 平坦配列: ユニットの template → orphan のテキスト(順序は apply と合わせる)
+  return units.map(u => u.tmpl).concat(orphans.map(o => o.orig.trim()));
+})()
+""";
+
+    /// <summary>訳文配列(units → orphans の順)を適用して DOM を組み立て、訳文 HTML をキャッシュする関数式。</summary>
+    public const string TranslateApplyFn = """
+((trans, detected) => {
+  const st = window.__karuTrans;
+  if (!st) return 0;
+  const units = st.units, leafEls = st.leafEls, orphans = st.orphans;
+  const parse = (s) => {
+    const out = []; let last = 0; const re = /\{(\d+)\}/g; let m;
+    while ((m = re.exec(s))) { if (m.index > last) out.push({ t: s.slice(last, m.index) }); out.push({ k: +m[1] }); last = m.index + m[0].length; }
+    if (last < s.length) out.push({ t: s.slice(last) });
+    return out;
+  };
+  // ユニットは「子(インライン)→親(葉ブロック)」の順に並ぶので、この順で組み立てれば
+  // 子要素の中身を先に確定してから親へ差し込める。
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i];
+    const tr = (trans[i] != null && trans[i] !== '') ? trans[i] : u.tmpl;
+    const toks = parse(tr);
+    const used = new Set();
+    while (u.el.firstChild) u.el.removeChild(u.el.firstChild);
+    for (const tok of toks) {
+      if (tok.t != null) { if (tok.t.length) u.el.appendChild(document.createTextNode(tok.t)); }
+      else { const c = u.childElems[tok.k]; if (c) { u.el.appendChild(c); used.add(tok.k); } }
+    }
+    // 訳文がプレースホルダを落とした場合でも要素を失わないよう末尾に付ける
+    for (let k = 0; k < u.childElems.length; k++) if (!used.has(k)) u.el.appendChild(u.childElems[k]);
+  }
+  // orphan テキストノード(前後の空白は原文のものを保つ)
+  for (let j = 0; j < orphans.length; j++) {
+    const o = orphans[j];
+    const t = trans[units.length + j];
+    if (t != null && t !== '') {
+      const raw = o.orig;
+      const lead = (raw.match(/^\s*/) || [''])[0];
+      const trail = (raw.match(/\s*$/) || [''])[0];
+      o.trans = lead + t + trail;
+      try { o.node.nodeValue = o.trans; } catch (e) {}
+    }
+  }
+  st.transHTML = leafEls.map(el => el.innerHTML);
+  st.shown = 'translated';
+  return units.length + orphans.length;
+})
+""";
+
+    /// <summary>キャッシュ済みの訳文へ戻す(ネットワーク不要。葉ブロックは innerHTML 差し替え)。</summary>
+    public const string TranslateReapply = """
+(() => {
+  const st = window.__karuTrans;
+  if (!st || !st.transHTML) return 0;
+  for (let i = 0; i < st.leafEls.length; i++) { try { st.leafEls[i].innerHTML = st.transHTML[i]; } catch (e) {} }
+  for (const o of st.orphans) if (o.trans != null) { try { o.node.nodeValue = o.trans; } catch (e) {} }
+  st.shown = 'translated';
+  return st.leafEls.length;
+})()
+""";
+
+    /// <summary>原文へ戻す(葉ブロックは原文 innerHTML を差し替え、orphan は原文 nodeValue に戻す)。</summary>
+    public const string TranslateRestore = """
+(() => {
+  const st = window.__karuTrans;
+  if (!st) return 0;
+  for (let i = 0; i < st.leafEls.length; i++) { try { st.leafEls[i].innerHTML = st.origHTML[i]; } catch (e) {} }
+  for (const o of st.orphans) { try { o.node.nodeValue = o.orig; } catch (e) {} }
+  st.shown = 'original';
+  return st.leafEls.length;
+})()
 """;
 
     /// <summary>
@@ -539,6 +700,7 @@ static class Injections
     'Ctrl+Tab : タブ一覧 (j/k+Enter · Ctrl+Wで閉じる)\nr : 再読み込み\n' +
     '> / < : 再生速度 ±0.25\n= : 等速に戻す\n' +
     'yy : URLコピー\nb : お気に入り一覧 (j/k+Enter · Shiftで新タブ · もう一度bで閉じる)\n? : このヘルプ\n\n' +
+    'Ctrl+Shift+Y 翻訳⇄原文 · Ctrl+Shift+D タブを別ウィンドウへ分離\n' +
     'Ctrl+B 動画集中モード · Ctrl+O 動画フルスクリーン · Ctrl+Shift+W 終了';
 
   // ---- 動画の再生速度 (embedプレーヤーには倍速UIが無いため自前で提供。全サイトの<video>に効く) ----

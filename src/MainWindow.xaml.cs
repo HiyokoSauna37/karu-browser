@@ -172,6 +172,9 @@ public partial class MainWindow : Window
                 //     (裏タブのメモリはサスペンド/休眠側で回収済みで、これらの追加削減効果は小さい)
                 AdditionalBrowserArguments =
                     "--autoplay-policy=no-user-gesture-required " +
+                    // 自動化ブラウザに見えて Cloudflare 等のボット判定に弾かれるのを防ぐ:
+                    // navigator.webdriver を実ブラウザ同様に消す(ネイティブなフラグなので JS 改ざん痕は残らない)
+                    "--disable-blink-features=AutomationControlled " +
                     "--process-per-site --renderer-process-limit=4 " +
                     "--disable-site-isolation-trials " +
                     "--disk-cache-size=134217728 --media-cache-size=52428800 --disable-sync " +
@@ -429,6 +432,9 @@ public partial class MainWindow : Window
         // Shift付きを先に判定しないと Ctrl+T が Ctrl+Shift+T を食う
         if (ctrl && shift && key == Key.W) { e.Handled = true; Close(); }
         else if (ctrl && shift && key == Key.T) { e.Handled = true; RestoreClosedTab(); }
+        // Ctrl+Shift+D は Ctrl+D(ブックマーク)より先に判定する
+        else if (ctrl && shift && key == Key.D) { e.Handled = true; if (_active is not null) DetachTab(_active); }
+        else if (ctrl && shift && key == Key.Y) { e.Handled = true; if (_active is not null) _ = TranslatePageToggleAsync(_active); }
         else if (ctrl && shift && key == Key.PageDown) { e.Handled = true; MoveTab(1); }
         else if (ctrl && shift && key == Key.PageUp) { e.Handled = true; MoveTab(-1); }
         else if (ctrl && key == Key.PageDown) { e.Handled = true; CycleTab(1); }
