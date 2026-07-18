@@ -615,7 +615,8 @@ public partial class MainWindow
 
     // ---- ページ翻訳 (Ctrl+Shift+Y / メニュー。「このページを翻訳」相当) ----
 
-    record TransState(bool Exists, string Shown, bool HasTranslated);
+    record TransState(bool Exists, string Shown, bool HasTranslated, bool Changed);
+    record TransCollect(int Gen, string[] Segs);
     static readonly JsonSerializerOptions TransJsonOpts = new() { PropertyNameCaseInsensitive = true };
     readonly HashSet<BrowserTab> _translating = new(); // 翻訳中の再トグルを無視する(適用と復元の競合防止)
 
@@ -644,35 +645,43 @@ public partial class MainWindow
         {
             var stateJson = await core.ExecuteScriptAsync(Injections.TranslateState);
             var st = JsonSerializer.Deserialize<TransState>(stateJson, TransJsonOpts);
+            // キャッシュでのトグルは「ページが実質変わっていない」場合だけ意味がある。
+            // SPA のソフト遷移で changed=true になったら、shown フラグは信用せず新規翻訳へ落とす
+            // (旧: 遷移後も restore/reapply に入り、切り離された旧要素へ空振りして「効かない」ように見えた)。
             // 翻訳表示中 → 原文へ戻す
-            if (st is { Exists: true, Shown: "translated" })
+            if (st is { Exists: true, Changed: false, Shown: "translated" })
             {
                 await core.ExecuteScriptAsync(Injections.TranslateRestore);
                 return;
             }
             // 原文表示 + 訳キャッシュ有り → ネットワーク無しで再適用
-            if (st is { Exists: true, Shown: "original", HasTranslated: true })
+            if (st is { Exists: true, Changed: false, Shown: "original", HasTranslated: true })
             {
                 await core.ExecuteScriptAsync(Injections.TranslateReapply);
                 return;
             }
-            // 新規翻訳: テキストノードを集める → gtx で並列翻訳 → 届いたバッチから順次適用
-            var segsJson = await core.ExecuteScriptAsync(Injections.TranslateCollect);
-            var segs = JsonSerializer.Deserialize<string[]>(segsJson) ?? Array.Empty<string>();
-            if (segs.Length == 0) return;
-            async Task ApplyAsync(string[] cur)
+            // 新規翻訳(SPA 遷移で別ページ扱いになった場合を含む)。画面に旧訳が残っていれば
+            // 先に原文へ戻してから収集する(訳文を「原文」として再収集して二重翻訳しない)
+            if (st is { Exists: true, Shown: "translated" })
+                await core.ExecuteScriptAsync(Injections.TranslateRestore);
+            // テキストを集める → gtx で並列翻訳 → 届いたバッチから順次適用
+            var colJson = await core.ExecuteScriptAsync(Injections.TranslateCollect);
+            var col = JsonSerializer.Deserialize<TransCollect>(colJson, TransJsonOpts);
+            if (col is null || col.Segs.Length == 0) return;
+            async Task ApplyAsync(string[] cur, bool final)
             {
                 var transJson = JsonSerializer.Serialize(cur);
-                await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},\"\")");
+                // gen 付きで適用 — API 往復中に再収集・ページ遷移していたら ApplyFn 側が捨てる
+                await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},{col.Gen},{(final ? "true" : "false")})");
             }
             var throttle = Stopwatch.StartNew();
-            var (translations, _, _) = await Translator.TranslateAsync(segs, "ja", onProgress: cur =>
+            var (translations, _, _) = await Translator.TranslateAsync(col.Segs, "ja", onProgress: cur =>
             {
                 if (throttle.ElapsedMilliseconds < 350) return Task.CompletedTask; // 適用は DOM 全体の組み直しなので間引く
                 throttle.Restart();
-                return ApplyAsync(cur);
+                return ApplyAsync(cur, final: false);
             });
-            await ApplyAsync(translations);
+            await ApplyAsync(translations, final: true);
         }
         catch { }
         finally { _translating.Remove(tab); }

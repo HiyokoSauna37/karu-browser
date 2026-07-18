@@ -9,7 +9,7 @@
     <AssemblyName>Karu</AssemblyName>
     <RootNamespace>Karu</RootNamespace>
     <!-- ローカルビルド用の基準値。リリースは release.yml がタグ名 (v0.2.0 → 0.2.0) で上書きする -->
-    <Version>0.2.0</Version>
+    <Version>0.2.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>karu.ico</ApplicationIcon>
     <!-- AddWebResourceRequestedFilter の旧オーバーロードが新SDKで obsolete 扱いのため -->

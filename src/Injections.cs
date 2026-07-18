@@ -158,13 +158,34 @@ static class Injections
     /// 葉ブロックの innerHTML スナップショット(原文/訳文)を差し替えるだけ。
     /// </summary>
 
-    /// <summary>現在の翻訳状態を JSON で返す ({exists, shown, hasTranslated})。</summary>
+    /// <summary>現在の翻訳状態を JSON で返す ({exists, shown, hasTranslated, changed})。
+    /// SPA のソフト遷移(pushState 等)では window(= __karuTrans)が残ったまま DOM だけ入れ替わるため、
+    /// 旧状態が現在の DOM をまだ代表しているかを必ず判定する(changed=true なら「実質別ページ」)。
+    /// これを見ずに shown フラグでトグルすると、切り離された旧要素への復元/再適用を空振りし続け
+    /// 「翻訳が効かなくなる」。判定は (a)既知の葉ブロックが全滅、または (b)現在の本文テキストのうち
+    /// 既知ノード(接続中の葉ブロック+orphan)が覆う割合が 2/3 未満、のどちらか。</summary>
     public const string TranslateState = """
 (() => {
   const st = window.__karuTrans;
-  return st
-    ? { exists: true, shown: st.shown, hasTranslated: Array.isArray(st.transHTML) && st.transHTML.length > 0 }
-    : { exists: false, shown: '', hasTranslated: false };
+  if (!st) return { exists: false, shown: '', hasTranslated: false, changed: false };
+  const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','TEXTAREA','PRE','SVG','CANVAS']);
+  let covered = 0;
+  let live = 0;
+  for (const el of st.leafEls) if (el.isConnected) { live++; covered += (el.textContent || '').length; }
+  for (const o of st.orphans) if (o.node.isConnected) covered += (o.node.nodeValue || '').length;
+  let cur = 0;
+  if (document.body) {
+    const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    let tn;
+    while ((tn = w.nextNode())) {
+      if (!tn.nodeValue || !tn.nodeValue.trim()) continue;
+      const pe = tn.parentElement;
+      if (pe && SKIP.has(pe.tagName)) continue;
+      cur += tn.nodeValue.length;
+    }
+  }
+  const changed = (st.leafEls.length > 0 && live === 0) || covered * 3 < cur * 2;
+  return { exists: true, shown: st.shown, hasTranslated: Array.isArray(st.transHTML) && st.transHTML.length > 0, changed };
 })()
 """;
 
@@ -226,18 +247,26 @@ static class Injections
     orphans.push({ node: tn, orig: tn.nodeValue });
   }
 
-  window.__karuTrans = { units, leafEls, origHTML, transHTML: null, orphans, shown: 'original' };
+  // 世代番号: 翻訳 API 往復中の再収集・ページ遷移をまたいだ古い適用を ApplyFn 側で捨てるための印
+  const gen = (window.__karuTransGen = (window.__karuTransGen || 0) + 1);
+  window.__karuTrans = { gen, units, leafEls, origHTML, transHTML: null, orphans, shown: 'original' };
   // 平坦配列: ユニットの template → orphan のテキスト(順序は apply と合わせる)
-  return units.map(u => u.tmpl).concat(orphans.map(o => o.orig.trim()));
+  return { gen, segs: units.map(u => u.tmpl).concat(orphans.map(o => o.orig.trim())) };
 })()
 """;
 
-    /// <summary>訳文配列(units → orphans の順)を適用して DOM を組み立て、訳文 HTML をキャッシュする関数式。</summary>
+    /// <summary>訳文配列(units → orphans の順)を適用して DOM を組み立てる関数式。
+    /// gen は Collect が返した世代番号 — 翻訳 API 往復中に再収集・ページ遷移した場合の古い適用を捨てる。
+    /// final=true(最終適用)のときだけ訳文 HTML をキャッシュする(途中で失敗しても不完全な訳キャッシュが
+    /// 残らず、次のトグルで翻訳し直せる)。切り離された要素への書き込みはスキップする。</summary>
     public const string TranslateApplyFn = """
-((trans, detected) => {
+((trans, gen, final) => {
   const st = window.__karuTrans;
-  if (!st) return 0;
+  if (!st || st.gen !== gen) return -1;
   const units = st.units, leafEls = st.leafEls, orphans = st.orphans;
+  // SPA 遷移で既知ノードが全滅していたら何もしない(shown フラグを汚さない)
+  const anyLive = leafEls.some(el => el.isConnected) || orphans.some(o => o.node.isConnected);
+  if ((leafEls.length || orphans.length) && !anyLive) return -1;
   const parse = (s) => {
     const out = []; let last = 0; const re = /\{(\d+)\}/g; let m;
     while ((m = re.exec(s))) { if (m.index > last) out.push({ t: s.slice(last, m.index) }); out.push({ k: +m[1] }); last = m.index + m[0].length; }
@@ -248,6 +277,7 @@ static class Injections
   // 子要素の中身を先に確定してから親へ差し込める。
   for (let i = 0; i < units.length; i++) {
     const u = units[i];
+    if (!u.el.isConnected) continue;
     const tr = (trans[i] != null && trans[i] !== '') ? trans[i] : u.tmpl;
     const toks = parse(tr);
     const used = new Set();
@@ -263,7 +293,7 @@ static class Injections
   for (let j = 0; j < orphans.length; j++) {
     const o = orphans[j];
     const t = trans[units.length + j];
-    if (t != null && t !== '') {
+    if (t != null && t !== '' && o.node.isConnected) {
       const raw = o.orig;
       const lead = (raw.match(/^\s*/) || [''])[0];
       const trail = (raw.match(/\s*$/) || [''])[0];
@@ -271,7 +301,7 @@ static class Injections
       try { o.node.nodeValue = o.trans; } catch (e) {}
     }
   }
-  st.transHTML = leafEls.map(el => el.innerHTML);
+  if (final) st.transHTML = leafEls.map(el => el.innerHTML);
   st.shown = 'translated';
   return units.length + orphans.length;
 })
@@ -282,8 +312,8 @@ static class Injections
 (() => {
   const st = window.__karuTrans;
   if (!st || !st.transHTML) return 0;
-  for (let i = 0; i < st.leafEls.length; i++) { try { st.leafEls[i].innerHTML = st.transHTML[i]; } catch (e) {} }
-  for (const o of st.orphans) if (o.trans != null) { try { o.node.nodeValue = o.trans; } catch (e) {} }
+  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].innerHTML = st.transHTML[i]; } catch (e) {} }
+  for (const o of st.orphans) if (o.trans != null && o.node.isConnected) { try { o.node.nodeValue = o.trans; } catch (e) {} }
   st.shown = 'translated';
   return st.leafEls.length;
 })()
@@ -294,8 +324,8 @@ static class Injections
 (() => {
   const st = window.__karuTrans;
   if (!st) return 0;
-  for (let i = 0; i < st.leafEls.length; i++) { try { st.leafEls[i].innerHTML = st.origHTML[i]; } catch (e) {} }
-  for (const o of st.orphans) { try { o.node.nodeValue = o.orig; } catch (e) {} }
+  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].innerHTML = st.origHTML[i]; } catch (e) {} }
+  for (const o of st.orphans) if (o.node.isConnected) { try { o.node.nodeValue = o.orig; } catch (e) {} }
   st.shown = 'original';
   return st.leafEls.length;
 })()

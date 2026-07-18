@@ -34,6 +34,45 @@ static class Translator
     /// <summary>送る翻訳リクエストの上限。超えたら以降は未翻訳のまま残し Partial=true にする。</summary>
     const int MaxRequests = 80;
 
+    /// <summary>429/5xx 時に 1 回だけ再試行するまでの待ち時間。</summary>
+    const int RetryDelayMs = 1500;
+
+    // 訳文のプロセス全域メモ(LRU)。キーは "from\nto\n原文(trim済)"。
+    // サイト内はヘッダ/メニュー等の同一文言がページをまたいで繰り返されるため、
+    // ページ遷移を重ねても差分だけ gtx を叩く(無料エンドポイントのレート制限対策を兼ねる)。
+    const int MemoCap = 10_000;
+    static readonly object MemoLock = new();
+    static readonly Dictionary<string, LinkedListNode<(string Key, string T, string? D)>> Memo = new();
+    static readonly LinkedList<(string Key, string T, string? D)> MemoOrder = new();
+
+    static string MemoKey(string from, string to, string text) => $"{from}\n{to}\n{text}";
+
+    static (string T, string? D)? MemoGet(string key)
+    {
+        lock (MemoLock)
+        {
+            if (!Memo.TryGetValue(key, out var node)) return null;
+            MemoOrder.Remove(node); // LRU: 触れたエントリを末尾へ回す
+            MemoOrder.AddLast(node);
+            return (node.Value.T, node.Value.D);
+        }
+    }
+
+    static void MemoSet(string key, string t, string? d)
+    {
+        lock (MemoLock)
+        {
+            if (Memo.TryGetValue(key, out var old)) MemoOrder.Remove(old);
+            Memo[key] = MemoOrder.AddLast((key, t, d));
+            if (Memo.Count > MemoCap)
+            {
+                var oldest = MemoOrder.First!;
+                MemoOrder.RemoveFirst();
+                Memo.Remove(oldest.Value.Key);
+            }
+        }
+    }
+
     /// <summary>
     /// 複数セグメントをまとめて翻訳し、入力と 1:1 に対応する訳文配列を返す。
     /// 小さいセグメントは改行連結で 1 リクエストにまとめ(gtx は改行境界を保つので split で復元)、
@@ -70,6 +109,13 @@ static class Translator
         {
             var seg = segments[i].Trim();
             if (seg.Length == 0) continue;
+            // メモ済みの訳は先に埋め、未訳分だけを gtx へ送る
+            if (MemoGet(MemoKey(from, to, seg)) is { } hit)
+            {
+                translations[i] = hit.T;
+                Note(hit.D);
+                continue;
+            }
             if (seg.Length + 1 > BatchBudget) { longs.Add(i); continue; }
             if (curLen + seg.Length + 1 > BatchBudget && cur.Count > 0)
             {
@@ -94,7 +140,11 @@ static class Translator
                 var parts = text.Split('\n');
                 if (parts.Length == idxs.Count)
                 {
-                    for (int k = 0; k < idxs.Count; k++) translations[idxs[k]] = parts[k];
+                    for (int k = 0; k < idxs.Count; k++)
+                    {
+                        translations[idxs[k]] = parts[k];
+                        MemoSet(MemoKey(from, to, segments[idxs[k]].Trim()), parts[k], d);
+                    }
                 }
                 else
                 {
@@ -104,6 +154,7 @@ static class Translator
                         if (!TryBook()) return;
                         var (t2, d2) = await ChunkAsync(segments[i].Trim(), to, from);
                         translations[i] = t2;
+                        MemoSet(MemoKey(from, to, segments[i].Trim()), t2, d2);
                         Note(d2);
                     }
                 }
@@ -131,14 +182,17 @@ static class Translator
                 if (rest.Length > 0) slices.Add(rest);
 
                 var sb = new StringBuilder();
+                string? det = null;
                 foreach (var s in slices)
                 {
                     if (!TryBook()) return;
                     var (t, d) = await ChunkAsync(s, to, from);
                     sb.Append(t);
+                    det ??= d;
                     Note(d);
                 }
                 translations[idx] = sb.ToString();
+                MemoSet(MemoKey(from, to, segments[idx].Trim()), translations[idx], det);
             }
             catch { partial = true; }
             finally { Gate.Release(); }
@@ -159,8 +213,8 @@ static class Translator
     /// <summary>並列度の上限ゲート(プロセス内で共有 — 複数タブ同時翻訳でも合計 MaxParallel 本)。</summary>
     static readonly SemaphoreSlim Gate = new(MaxParallel);
 
-    /// <summary>gtx エンドポイントへ 1 リクエスト送り、翻訳文と検出言語を返す。</summary>
-    static async Task<(string Text, string? Detected)> ChunkAsync(string text, string to, string from)
+    /// <summary>gtx へのリクエストを 1 回組み立てて送る(HttpRequestMessage は使い回せないため都度生成)。</summary>
+    static async Task<HttpResponseMessage> SendGtxAsync(string text, string to, string from)
     {
         var url = $"{Base}?client=gtx&sl={Uri.EscapeDataString(from)}&tl={Uri.EscapeDataString(to)}&dt=t";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
@@ -169,7 +223,21 @@ static class Translator
                                         "application/x-www-form-urlencoded"),
         };
         req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0");
-        using var res = await Http.SendAsync(req);
+        return await Http.SendAsync(req);
+    }
+
+    /// <summary>gtx エンドポイントへ 1 リクエスト送り、翻訳文と検出言語を返す。</summary>
+    static async Task<(string Text, string? Detected)> ChunkAsync(string text, string to, string from)
+    {
+        var res = await SendGtxAsync(text, to, from);
+        if ((int)res.StatusCode == 429 || (int)res.StatusCode >= 500)
+        {
+            // 無料エンドポイントの一時的なレート制限/瞬断は間を置いて 1 回だけ再試行する
+            res.Dispose();
+            await Task.Delay(RetryDelayMs);
+            res = await SendGtxAsync(text, to, from);
+        }
+        using var _ = res;
         res.EnsureSuccessStatusCode();
         var body = await res.Content.ReadAsStringAsync();
 

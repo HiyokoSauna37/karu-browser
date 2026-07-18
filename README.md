@@ -81,7 +81,9 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 
 Rather than translating each text run on its own, it translates block by block with inline elements (links, `<code>`, …) swapped for placeholders. That way **links and code keep their contents and get repositioned to the correct Japanese word order** (code contents are left untranslated). Translating text nodes individually would scramble the word order of a sentence split across a link and misplace the link — this avoids that.
 
-It uses Google Translate's free endpoint (no API key; the request runs on the app side). Being unofficial, very large pages can hit rate limits (any leftover text stays in the original language).
+Single-page apps are handled too: when a site swaps its content without a real page load (soft navigation, e.g. YouTube), the toggle notices the page has effectively changed and translates the new content instead of flipping a stale cache.
+
+It uses Google Translate's free endpoint (no API key; the request runs on the app side). Repeated text (menus, headers) is cached app-wide, so browsing across pages of the same site only translates what's new. Being unofficial, very large pages can hit rate limits (the app retries once on a rate-limit response; any leftover text stays in the original language).
 
 ## Requirements
 
