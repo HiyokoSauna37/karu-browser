@@ -68,7 +68,7 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 | `Ctrl+1`–`9` | Jump to tab N / last tab |
 | `Ctrl+Shift+T` | Reopen last closed tab |
 | `Ctrl+M` | Open current video in mpv |
-| `Ctrl+E` | Open current page in Edge (for DRM video) |
+| `Ctrl+E` | Open current page in Edge |
 | `Ctrl+B` | Toggle video focus mode |
 | `Ctrl+O` | Toggle video fullscreen |
 | `F7` | Toggle caret browsing (restarts app) |

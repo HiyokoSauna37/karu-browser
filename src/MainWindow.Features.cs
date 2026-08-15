@@ -405,7 +405,7 @@ public partial class MainWindow
         if (Mpv.IsDrmSite(url))
         {
             MessageBox.Show(this,
-                "このサイトはDRM保護のため mpv では再生できません。\nCtrl+E で Edge で開いてください。", "Karu");
+                "このサイトはDRM保護のため mpv では再生できません。\nKaru のプレーヤーでそのまま再生してください。", "Karu");
             return;
         }
         double pos = 0;

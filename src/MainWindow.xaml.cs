@@ -170,6 +170,17 @@ public partial class MainWindow : Window
                 //   ※ --enable-low-end-device-mode と --js-flags=--optimize-for-size は、表示中タブの
                 //     V8実行やキャッシュまで遅くしてURL遷移の体感が悪化するため使わない
                 //     (裏タブのメモリはサスペンド/休眠側で回収済みで、これらの追加削減効果は小さい)
+                //
+                // Widevine DRM (U-NEXT/Netflix等の動画配信) を再生するために必要な2点:
+                //   ① msWidevinePlatform: WebView2 は Edge 本体と違い Widevine が既定で無効。
+                //      これを有効にしないと requestMediaKeySystemAccess('com.widevine.alpha') が
+                //      NotSupportedError で落ちる (PlayReady/ClearKey は既定で使えるので気付きにくい)。
+                //   ② --disable-component-update を付けない: Widevine CDM は
+                //      「WidevineCdm コンポーネント」として登録される。実体はランタイム同梱
+                //      (EdgeWebView\Application\<ver>\WidevineCdm) でダウンロードは不要だが、
+                //      component update 自体を切ると登録処理ごと飛ばされて CDM が見つからなくなる。
+                //      ※ --disable-background-networking は残してよい (更新チェックの通信は止まったまま)。
+                //   ①②どちらか欠けると U-NEXT は「再生エラーが発生しました。（sh_6012）」になる。
                 AdditionalBrowserArguments =
                     "--autoplay-policy=no-user-gesture-required " +
                     // 自動化ブラウザに見えて Cloudflare 等のボット判定に弾かれるのを防ぐ:
@@ -178,13 +189,13 @@ public partial class MainWindow : Window
                     "--process-per-site --renderer-process-limit=4 " +
                     "--disable-site-isolation-trials " +
                     "--disk-cache-size=134217728 --media-cache-size=52428800 --disable-sync " +
-                    "--disable-background-networking --disable-component-update " +
+                    "--disable-background-networking " +
                     "--disable-domain-reliability --disable-breakpad --no-pings " +
                     "--disable-renderer-accessibility --disable-notifications " +
                     "--disable-speech-api --disable-print-preview " +
                     "--disable-component-extensions-with-background-pages " +
                     "--enable-features=QuickIntensiveWakeUpThrottlingAfterLoading," +
-                    "NetworkServiceInProcess,NetworkServiceInProcess2 " +
+                    "NetworkServiceInProcess,NetworkServiceInProcess2,msWidevinePlatform " +
                     "--disable-features=BackForwardCache,Translate,OptimizationHints,msSmartScreenProtection," +
                     "Prerender2,NoStatePrefetch,MediaRouter,DialMediaRouteProvider," +
                     "GlobalMediaControls,LiveCaption,AutofillServerCommunication,SegmentationPlatform," +

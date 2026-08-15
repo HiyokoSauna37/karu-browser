@@ -20,7 +20,7 @@ static class Mpv
         return null;
     }
 
-    /// <summary>DRM配信サイト (mpv+yt-dlpでは再生不可能。Edge=Ctrl+E を案内する)</summary>
+    /// <summary>DRM配信サイト (Karu本体では再生できるが、mpv+yt-dlp へのオフロードだけは不可能)</summary>
     static readonly string[] DrmHosts =
     {
         "netflix.com", "primevideo.com", "amazon.co.jp", "amazon.com",
