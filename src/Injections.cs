@@ -729,7 +729,8 @@ static class Injections
     't : 新しいタブ\nx / X : タブを閉じる / 復元\no : URL / 検索\n' +
     'Ctrl+Tab : タブ一覧 (j/k+Enter · Ctrl+Wで閉じる)\nr : 再読み込み\n' +
     '> / < : 再生速度 ±0.25\n= : 等速に戻す\n' +
-    'yy : URLコピー\nb : お気に入り一覧 (j/k+Enter · Shiftで新タブ · もう一度bで閉じる)\n? : このヘルプ\n\n' +
+    'yy : URLコピー\nb : お気に入り一覧 (j/k+Enter · Shiftで新タブ · もう一度bで閉じる)\n' +
+    'Ctrl+D : お気に入りに登録 / 解除\n? : このヘルプ\n\n' +
     'Ctrl+Shift+Y 翻訳⇄原文 · Ctrl+Shift+D タブを別ウィンドウへ分離\n' +
     'Ctrl+B 動画集中モード · Ctrl+O 動画フルスクリーン · Ctrl+Shift+W 終了';
 
@@ -770,11 +771,95 @@ static class Injections
 
   const block = e => { e.preventDefault(); e.stopImmediatePropagation(); };
 
+  // ---- スクロール対象の解決 ----
+  // Twitch等のSPAは html/body を overflow:hidden にして内側のdivをスクロールさせるため、
+  // window.scrollBy() では1pxも動かない。実際にスクロールを持つ要素を探して直接動かす。
+  const OVF = /^(auto|scroll|overlay)$/;
+  const root = () => document.scrollingElement || document.documentElement;
+  const overflows = (el, dx) => dx
+    ? el.scrollWidth - el.clientWidth >= 2
+    : el.scrollHeight - el.clientHeight >= 2;
+  const scrollable = (el, dx) => {
+    if (!el || el.nodeType !== 1 || !overflows(el, dx)) return false;
+    const st = getComputedStyle(el);
+    return OVF.test(dx ? st.overflowX : st.overflowY);
+  };
+  // その向きにまだ動く余地があるか (端まで来た入れ子は飛ばして外側を探すため)
+  const hasRoom = (el, dx, dy) => {
+    if (dy > 0) return el.scrollTop < el.scrollHeight - el.clientHeight - 1;
+    if (dy < 0) return el.scrollTop > 1;
+    if (dx > 0) return el.scrollLeft < el.scrollWidth - el.clientWidth - 1;
+    return el.scrollLeft > 1;
+  };
+  // 祖先をたどる (Shadow DOM境界はホスト要素へ抜ける)
+  const up = el => el.parentElement ||
+    (el.getRootNode() instanceof ShadowRoot ? el.getRootNode().host : null);
+  const fromChain = (el, dx, dy, alt) => {
+    for (; el; el = up(el)) {
+      if (!scrollable(el, dx)) continue;
+      if (hasRoom(el, dx, dy)) return el;
+      if (!alt.el) alt.el = el;
+    }
+    return null;
+  };
+  // 画面に一番大きく映っているスクロール領域 (マウスもフォーカスも手掛かりが無いとき用)
+  const largest = (dx, dy, alt) => {
+    let best = null, area = 0;
+    for (const el of document.querySelectorAll('div,main,section,article,aside,nav,ul,ol')) {
+      if (!overflows(el, dx) || !scrollable(el, dx)) continue;
+      const r = el.getBoundingClientRect();
+      const w = Math.min(r.right, innerWidth) - Math.max(r.left, 0);
+      const h = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
+      if (w <= 0 || h <= 0) continue;
+      if (!hasRoom(el, dx, dy)) { if (!alt.el) alt.el = el; continue; }
+      if (w * h > area) { area = w * h; best = el; }
+    }
+    return best;
+  };
+
+  // 直近のマウス位置。ホイールと同じ感覚で、乗せている領域 (Twitchのチャット等) を優先する
+  let mouse = null, cached = null, cachedAxis = 0;
+  addEventListener('mousemove', e => { mouse = [e.clientX, e.clientY]; cached = null; },
+    { capture: true, passive: true });
+
+  const scroller = (dx, dy) => {
+    const axis = dx ? 1 : 2;
+    // 連打・キーリピート中に毎回DOM全体を走査しないよう、動ける間は前回の対象を使い回す
+    if (cached && cachedAxis === axis && cached.isConnected && hasRoom(cached, dx, dy)) return cached;
+    const r = root();
+    let el = null;
+    if (r && overflows(r, dx)) {
+      el = r; // 普通のページスクロールが使えるならそれが最優先
+    } else {
+      const alt = { el: null }, seeds = [];
+      if (mouse) seeds.push(document.elementFromPoint(mouse[0], mouse[1]));
+      if (document.activeElement && document.activeElement !== document.body) seeds.push(document.activeElement);
+      seeds.push(document.elementFromPoint(innerWidth / 2, innerHeight / 2));
+      for (const s of seeds) { if (s && (el = fromChain(s, dx, dy, alt))) break; }
+      el = el || largest(dx, dy, alt) || alt.el || r;
+    }
+    cached = el; cachedAxis = axis;
+    return el;
+  };
+
+  const scrollAxis = (dx, dy) => {
+    const el = scroller(dx, dy);
+    if (el) el.scrollBy({ left: dx, top: dy, behavior: 'instant' });
+  };
+  const scrollHalf = sign => {
+    const el = scroller(0, sign);
+    if (el) el.scrollBy({ top: sign * (el.clientHeight || innerHeight) / 2, behavior: 'instant' });
+  };
+  const scrollEnd = sign => {
+    const el = scroller(0, sign);
+    if (el) el.scrollTo({ top: sign > 0 ? el.scrollHeight : 0, behavior: 'instant' });
+  };
+
   const act = {
-    j: () => scrollBy(0, SCROLL), k: () => scrollBy(0, -SCROLL),
-    h: () => scrollBy(-SCROLL, 0), l: () => scrollBy(SCROLL, 0),
-    d: () => scrollBy(0, innerHeight / 2), u: () => scrollBy(0, -innerHeight / 2),
-    G: () => scrollTo(0, (document.scrollingElement || document.documentElement).scrollHeight),
+    j: () => scrollAxis(0, SCROLL), k: () => scrollAxis(0, -SCROLL),
+    h: () => scrollAxis(-SCROLL, 0), l: () => scrollAxis(SCROLL, 0),
+    d: () => scrollHalf(1), u: () => scrollHalf(-1),
+    G: () => scrollEnd(1),
     H: () => history.back(), L: () => history.forward(),
     r: () => location.reload(),
     f: () => startHints(false), F: () => startHints(true),
@@ -802,7 +887,7 @@ static class Injections
     const now = Date.now();
     const combo = (now - lastT < 600 ? lastKey : '') + k;
     lastKey = k; lastT = now;
-    if (combo === 'gg') { block(e); scrollTo(0, 0); lastKey = ''; return; }
+    if (combo === 'gg') { block(e); scrollEnd(-1); lastKey = ''; return; }
     if (combo === 'yy') {
       block(e);
       if (navigator.clipboard) navigator.clipboard.writeText(location.href).catch(() => {});
