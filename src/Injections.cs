@@ -546,27 +546,43 @@ static class Injections
     public const string TwitchAdCover = """
 (() => {
   if (!/(^|\.)twitch\.tv$/.test(location.hostname)) return;
-  let cover = null, prevMuted = null;
+  const MAX = 180000; // 保険: ホストからの解除が届かなくても必ず外す
+  let cover = null, prevMuted = null, guard = 0;
   const video = () => document.querySelector('video');
+  // 被うのはプレーヤーの中だけ。ページ全体を覆うとチャットもUIも真っ暗になる
+  const box = () => {
+    const v = video();
+    if (!v) return null;
+    return v.closest('.video-player__container') ||
+           v.closest('[data-a-target="video-player"]') ||
+           v.parentElement;
+  };
   const show = () => {
     const v = video();
     if (v && prevMuted === null) { prevMuted = v.muted; v.muted = true; }
-    if (cover) return;
+    clearTimeout(guard);
+    guard = setTimeout(hide, MAX);
+    if (cover && cover.isConnected) return;
+    const b = box();
+    if (!b) return;  // プレーヤーが見つからないときは消音だけにして、何も覆わない
+    if (getComputedStyle(b).position === 'static') b.style.position = 'relative';
     cover = document.createElement('div');
     cover.id = '__karuTwAd';
-    cover.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#0e0e10;' +
+    cover.style.cssText = 'position:absolute;inset:0;z-index:100;background:#0e0e10;' +
       'display:flex;align-items:center;justify-content:center;' +
-      'color:#9b8f82;font:600 15px Consolas,monospace;letter-spacing:.05em;pointer-events:none';
+      'color:#9b8f82;font:600 14px Consolas,monospace;letter-spacing:.05em;pointer-events:none';
     cover.textContent = '広告を再生中 — 音声と映像を遮断しています';
-    document.documentElement.appendChild(cover);
+    b.appendChild(cover);
   };
   const hide = () => {
+    clearTimeout(guard);
+    guard = 0;
     const v = video();
-    if (v && prevMuted !== null) { v.muted = prevMuted; }
+    if (v && prevMuted !== null) v.muted = prevMuted;
     prevMuted = null;
     if (cover) { cover.remove(); cover = null; }
   };
-  window.__karuTwitchAd = on => { try { on ? show() : hide(); } catch (e) {} };
+  window.__karuTwitchAd = on => { try { on ? show() : hide(); } catch (e) { hide(); } };
 })();
 """;
 

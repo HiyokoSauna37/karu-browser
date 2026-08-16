@@ -9,7 +9,7 @@
     <AssemblyName>Karu</AssemblyName>
     <RootNamespace>Karu</RootNamespace>
     <!-- ローカルビルド用の基準値。リリースは release.yml がタグ名 (v0.2.0 → 0.2.0) で上書きする -->
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>karu.ico</ApplicationIcon>
     <!-- ホスト側(WPF)の常駐メモリ削減: 併走GCスレッドを止める -->
