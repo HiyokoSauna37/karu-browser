@@ -9,7 +9,7 @@
 <p align="center">
   <a href="../../releases"><img src="https://img.shields.io/github/v/release/HiyokoSauna37/karu-browser?label=release&color=E8672E" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4" alt="Platform: Windows 10/11">
-  <img src="https://img.shields.io/badge/.NET-8.0-512BD4" alt=".NET 8">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-97CA00" alt="License: MIT"></a>
 </p>
 
@@ -88,7 +88,7 @@ It uses Google Translate's free endpoint (no API key; the request runs on the ap
 ## Requirements
 
 - Windows 10/11
-- [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) — already present on most Windows 11/10 machines with Edge installed
 - [mpv](https://mpv.io/) (optional, for `Ctrl+M`) — `winget install mpv-player.mpv-CI.MSVC`
 
@@ -104,7 +104,7 @@ Download the latest zip from [Releases](../../releases), extract it anywhere, an
 dotnet publish src/Karu.csproj -c Release -o dist
 ```
 
-The result is a framework-dependent build in `dist/` (requires the .NET 8 Desktop Runtime on the target machine).
+The result is a framework-dependent build in `dist/` (requires the .NET 10 Desktop Runtime on the target machine).
 
 ## Configuration
 

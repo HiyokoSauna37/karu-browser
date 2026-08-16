@@ -9,7 +9,7 @@
 <p align="center">
   <a href="../../releases"><img src="https://img.shields.io/github/v/release/HiyokoSauna37/karu-browser?label=release&color=E8672E" alt="最新リリース"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%2F11-0078D4" alt="対応OS: Windows 10/11">
-  <img src="https://img.shields.io/badge/.NET-8.0-512BD4" alt=".NET 8">
+  <img src="https://img.shields.io/badge/.NET-10.0-512BD4" alt=".NET 10">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-97CA00" alt="ライセンス: MIT"></a>
 </p>
 
@@ -88,7 +88,7 @@ SPA（シングルページアプリ）にも対応しています。YouTubeの�
 ## 必要環境
 
 - Windows 10/11
-- [.NET 8 デスクトップランタイム](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 デスクトップランタイム](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [WebView2 ランタイム](https://developer.microsoft.com/microsoft-edge/webview2/) — Edgeが入っているWindows 11/10ならほぼ標準で入っています
 - [mpv](https://mpv.io/)（任意、`Ctrl+M`用） — `winget install mpv-player.mpv-CI.MSVC`
 
@@ -104,7 +104,7 @@ SPA（シングルページアプリ）にも対応しています。YouTubeの�
 dotnet publish src/Karu.csproj -c Release -o dist
 ```
 
-`dist/` にフレームワーク依存ビルドが出力されます（実行先マシンに.NET 8 デスクトップランタイムが必要です）。
+`dist/` にフレームワーク依存ビルドが出力されます（実行先マシンに.NET 10 デスクトップランタイムが必要です）。
 
 ## 設定
 
