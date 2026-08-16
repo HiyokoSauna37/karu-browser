@@ -14,6 +14,9 @@ public class AppSettings
     public bool ForceH264 { get; set; } = true;
     /// <summary>フレームレート上限。60fps動画を30fps版にする(CPU 2〜4倍削減)。0で無制限。反映は再読み込み後</summary>
     public int MaxFps { get; set; } = 30;
+    /// <summary>Twitchのサーバー側挿入広告(SSAI)を、プレイリストを取り直して差し替えることで回避する。
+    /// 消せなかった広告は消音+被いに切り替える。反映は再読み込み後 (TwitchAds.cs)</summary>
+    public bool TwitchAdBlock { get; set; } = true;
 
     // ---- タブ休眠(ハイバネート)ポリシー (settings.json で調整可能) ----
     /// <summary>アクティブ以外に「温存」する直近使用タブの数</summary>

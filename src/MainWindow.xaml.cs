@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
 
     readonly BookmarkStore _bookmarks = new();
     readonly AdBlocker _adblock = new();
+    readonly TwitchAds _twitchAds = new();
     readonly AppSettings _settings = SettingsStore.Load();
     readonly DispatcherTimer _sleepTimer;
     readonly List<string> _closedUrls = new();
@@ -263,6 +265,8 @@ public partial class MainWindow : Window
             scripts.Add(Injections.MediaPolicy(_settings.ForceH264, _settings.MaxFps));
         if (_settings.MaxQuality.Length > 0)
             scripts.Add(Injections.TwitchQuality);
+        if (_settings.TwitchAdBlock)
+            scripts.Add(Injections.TwitchAdCover);
         scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality));
         scripts.Add(Injections.Vim);
         scripts.Add(Injections.PageCover);
@@ -354,6 +358,12 @@ public partial class MainWindow : Window
                 args.Response = core.Environment.CreateWebResourceResponse(null, 403, "Blocked by Karu", "");
                 return;
             }
+            if (_settings.TwitchAdBlock &&
+                (TwitchAds.IsUsher(req.Uri) || TwitchAds.IsMediaPlaylist(req.Uri)))
+            {
+                HandleTwitchPlaylist(core, args);
+                return;
+            }
             try { req.Headers.SetHeader("Save-Data", "on"); } catch { }
         };
         // SourceKinds.All にすると Service Worker / Shared Worker 発のリクエストも対象になる
@@ -364,8 +374,51 @@ public partial class MainWindow : Window
             foreach (var pattern in _adblock.UriFilters())
                 core.AddWebResourceRequestedFilter(pattern, CoreWebView2WebResourceContext.All,
                     CoreWebView2WebResourceRequestSourceKinds.All);
+        // Twitch の SSAI 対策 (TwitchAds)。HLS の取得は Web Worker 内で走るのでページ側の
+        // fetch フックからは見えないが、ここなら XmlHttpRequest として捕捉できる (実測確認済み)
+        if (_settings.TwitchAdBlock)
+            foreach (var pattern in new[] { "*usher.ttvnw.net/api/*", "*.playlist.ttvnw.net/v1/playlist/*" })
+                core.AddWebResourceRequestedFilter(pattern, CoreWebView2WebResourceContext.All,
+                    CoreWebView2WebResourceRequestSourceKinds.All);
 
         return core;
+    }
+
+    /// <summary>
+    /// Twitch のプレイリスト取得を横取りして、広告入りなら取り直した中身に差し替える。
+    /// ネットワーク往復が要るので必ず deferral を取る (取らずに await するとUIスレッドを止めてしまう)。
+    /// 取得に失敗したときは Response を設定せずに完了させ、通常どおりネットワークへ流す。
+    /// </summary>
+    async void HandleTwitchPlaylist(CoreWebView2 core, CoreWebView2WebResourceRequestedEventArgs args)
+    {
+        var deferral = args.GetDeferral();
+        try
+        {
+            var uri = args.Request.Uri;
+            string? body;
+            bool blocked = false;
+            if (TwitchAds.IsUsher(uri))
+            {
+                body = await _twitchAds.InterceptUsherAsync(uri);
+            }
+            else
+            {
+                var r = await _twitchAds.InterceptPlaylistAsync(uri);
+                body = r?.Body;
+                blocked = r?.Blocked ?? false;
+            }
+            // 差し替えられなかった広告はページ側で消音+被いに回す
+            try { _ = core.ExecuteScriptAsync($"window.__karuTwitchAd&&window.__karuTwitchAd({(blocked ? "true" : "false")})"); }
+            catch { }
+            if (body is null) return;
+
+            var bytes = new MemoryStream(Encoding.UTF8.GetBytes(body));
+            args.Response = core.Environment.CreateWebResourceResponse(
+                bytes, 200, "OK",
+                "Content-Type: application/vnd.apple.mpegurl\r\nAccess-Control-Allow-Origin: *");
+        }
+        catch { }
+        finally { deferral.Complete(); }
     }
 
     /// <summary>注入スクリプト(Vim層・ブックマークオーバーレイ)からのタブ操作コマンドを処理する。</summary>

@@ -37,7 +37,8 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 - **Translate the page** (`Ctrl+Shift+Y`) — like Chrome's "Translate this page": rewrites the body into Japanese in place; press again to flip back (translation ⇄ original toggle). Links and `<code>` are kept intact and repositioned to the correct Japanese word order. See [Translating pages](#translating-pages).
 - **Pop a tab into its own window** (`Ctrl+Shift+D`) — moves the current tab into a new window, for side-by-side viewing.
 - **Presents as a normal browser** — hides `navigator.webdriver` and scopes the low-spec spoof to YouTube only, so bot checks like Cloudflare are less likely to flag it as automated.
-- **Ad/tracker blocking** — either a built-in domain blocklist, or sideload uBlock Origin's unpacked extension (Karu injects its content scripts manually, since WebView2 doesn't run extension content scripts on its own).
+- **Ad/tracker blocking** — a built-in domain blocklist (`%APPDATA%\Karulocklist.txt`). **Sideloaded extensions cannot do this**: WebView2 runs no content scripts, and MV2 `webRequest` blocking has no effect either — measured, with uBlock Origin loaded and blocking nothing while costing memory.
+- **Twitch ad removal** — Twitch stitches ads into the same HLS stream as the broadcast (server-side ad insertion), so domain blocking cannot touch them. Karu watches the playlist for ad markers and swaps in a freshly fetched, clean playlist instead. Verified against real mid-rolls on a live channel (43 detections, 43 successful swaps, original quality preserved). If no clean playlist can be obtained it mutes and covers the player instead. Turn it off with `TwitchAdBlock` in `settings.json`.
 - **Session restore, saved passwords/autofill, bookmarks.**
 - **Caret browsing, video fullscreen via CDP, live memory usage breakdown.**
 
@@ -110,7 +111,7 @@ The result is a framework-dependent build in `dist/` (requires the .NET 10 Deskt
 
 Settings, bookmarks, the ad blocklist, and sideloaded extensions all live in `%APPDATA%\Karu`. WebView2's own profile data (cookies, login sessions) is under `%LOCALAPPDATA%\Karu\WebView2Data`. Open the settings folder from the in-app menu (top-right `≡` button).
 
-To use uBlock Origin instead of the built-in blocklist, download its unpacked Chromium extension and place it under `%APPDATA%\Karu\extensions\`.
+Unpacked Chromium extensions under `%APPDATA%\Karu\extensions\` are loaded, but **do not put an ad blocker there**. WebView2 runs neither content scripts nor MV2 `webRequest` blocking, so it blocks nothing — and the mere presence of an extension disables the built-in blocklist (measured: ~105 MB for the extension renderer alone, zero requests blocked).
 
 ## A note on SmartScreen
 

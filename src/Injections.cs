@@ -535,6 +535,41 @@ static class Injections
 })();
 """;
 
+    /// <summary>
+    /// Twitch の広告が消せなかったときの逃げ道。ホストが window.__karuTwitchAd(true/false) を呼ぶと
+    /// プレーヤーを消音して被いを出す。SSAI は配信本体と同じタイムラインなので尺は縮まらないが、
+    /// 少なくとも音と映像は遮れる。
+    ///
+    /// 消音は「元の状態を覚えてから muted=true」にし、解除で元へ戻す
+    /// (もともとユーザーが消音していたら、解除時に勝手に音を出さない)。
+    /// </summary>
+    public const string TwitchAdCover = """
+(() => {
+  if (!/(^|\.)twitch\.tv$/.test(location.hostname)) return;
+  let cover = null, prevMuted = null;
+  const video = () => document.querySelector('video');
+  const show = () => {
+    const v = video();
+    if (v && prevMuted === null) { prevMuted = v.muted; v.muted = true; }
+    if (cover) return;
+    cover = document.createElement('div');
+    cover.id = '__karuTwAd';
+    cover.style.cssText = 'position:fixed;inset:0;z-index:2147483646;background:#0e0e10;' +
+      'display:flex;align-items:center;justify-content:center;' +
+      'color:#9b8f82;font:600 15px Consolas,monospace;letter-spacing:.05em;pointer-events:none';
+    cover.textContent = '広告を再生中 — 音声と映像を遮断しています';
+    document.documentElement.appendChild(cover);
+  };
+  const hide = () => {
+    const v = video();
+    if (v && prevMuted !== null) { v.muted = prevMuted; }
+    prevMuted = null;
+    if (cover) { cover.remove(); cover = null; }
+  };
+  window.__karuTwitchAd = on => { try { on ? show() : hide(); } catch (e) {} };
+})();
+""";
+
     /// <summary>ブックマーク一覧オーバーレイ。{0} に JSON 配列 [{title,url},...] を埋め込む。
     /// キー=直接開く / j·k(↑↓)=選択移動 / Enter=選択を開く / Shift併用=新しいタブ。</summary>
     public static string BookmarkOverlay => BookmarkOverlaySrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
