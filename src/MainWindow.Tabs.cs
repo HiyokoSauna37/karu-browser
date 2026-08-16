@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Web.WebView2.Core;
@@ -16,6 +18,7 @@ namespace Karu;
 public partial class MainWindow
 {
     bool _maintaining;
+    bool _parked; // パーキング時の作業セット返却を1回だけにするフラグ (復帰でリセット)
 
     static WebView2 NewView() => new()
     {
@@ -95,6 +98,30 @@ public partial class MainWindow
         catch { }
     }
 
+    [DllImport("psapi.dll", SetLastError = true)]
+    static extern bool EmptyWorkingSet(IntPtr hProcess);
+
+    /// <summary>
+    /// ホストとWebView2の全プロセスの作業セットをOSへ返す。
+    /// 「使っていないのに物理RAMを掴んだまま」の状態を解消するもので、必要になればページフォールトで
+    /// 戻ってくる(=復帰が少し遅くなる)。そのため最小化パーキング時だけ、しかも全タブを休眠させた
+    /// 直後に一度だけ呼ぶ。実測: 621MB → 7MB。
+    /// </summary>
+    async Task TrimWorkingSetsAsync()
+    {
+        try
+        {
+            EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+            var env = await GetEnvAsync();
+            foreach (var pi in env.GetProcessInfos())
+            {
+                try { EmptyWorkingSet(Process.GetProcessById(pi.ProcessId).Handle); }
+                catch { /* 直前に終了したプロセス */ }
+            }
+        }
+        catch { }
+    }
+
     /// <summary>15秒ごとにタブのライフサイクルを進める (Active → Suspended → Hibernated)。</summary>
     async void MaintainTabs()
     {
@@ -146,6 +173,7 @@ public partial class MainWindow
             // パーキングモード: 最小化が続いたらアクティブ含め全タブ休眠 (音声再生中は除外)
             if (minimized && (now - _minimizedAt).TotalMinutes >= _settings.ParkMinutes)
             {
+                bool hibernated = false;
                 foreach (var t in Tabs.ToList())
                 {
                     CoreWebView2? c = null;
@@ -153,6 +181,14 @@ public partial class MainWindow
                     if (c is null || c.IsDocumentPlayingAudio) continue;
                     if (!c.IsSuspended) await CaptureVideoPosAsync(t);
                     HibernateTab(t, allowActive: true);
+                    hibernated = true;
+                }
+                // 休眠でプロセスを畳んだ直後、残ったプロセスが抱えている作業セットもOSへ返す。
+                // パーキング1回につき一度だけ (_parked はウィンドウ復帰時にリセットされる)
+                if (!_parked && (hibernated || Tabs.All(t => t.View is null)))
+                {
+                    _parked = true;
+                    await TrimWorkingSetsAsync();
                 }
             }
         }

@@ -72,6 +72,7 @@ public partial class MainWindow : Window
             }
             else if (_active is not null)
             {
+                _parked = false; // 次にパーキングへ入ったらまた作業セットを返す
                 if (_active.View is null) _ = WakeTabAsync(_active); // パーキング休眠からの復帰
                 else
                 {
@@ -333,9 +334,9 @@ public partial class MainWindow : Window
         //   - Save-Data: on を送り、対応サイトには軽量版レスポンスを要求
         //   - 拡張が無ければ blocklist.txt による広告・トラッカー遮断もここで行う
         // フィルタ対象のリクエストは1件ずつネットワーク処理が止まってUIスレッドへCOM往復するため、
-        // 対象種別を増やすほどページ読み込み全体が遅くなる。uBlock等の拡張が遮断を担う構成では
-        // Document(ナビゲーション本体+iframe)だけに絞り、内蔵ブロッカー構成のときだけ
-        // 広告・先読みが通るサブリソース種別も対象にする (Media/フォントは常に素通し)
+        // 「何を対象にするか」がそのままページ読み込みの速度に効く。ナビゲーション本体(Document)は
+        // 件数が少ないので常に見て、サブリソースは "*" ではなくブロック対象ドメインの
+        // ワイルドカードだけを登録する (AdBlocker.UriFilters)。
         core.WebResourceRequested += (_, args) =>
         {
             var req = args.Request;
@@ -355,17 +356,14 @@ public partial class MainWindow : Window
             }
             try { req.Headers.SetHeader("Save-Data", "on"); } catch { }
         };
-        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document);
+        // SourceKinds.All にすると Service Worker / Shared Worker 発のリクエストも対象になる
+        // (既定の Document のみでは SW 経由の広告・計測が素通りする)
+        core.AddWebResourceRequestedFilter("*", CoreWebView2WebResourceContext.Document,
+            CoreWebView2WebResourceRequestSourceKinds.All);
         if (_useBuiltinBlock)
-            foreach (var ctx in new[]
-            {
-                CoreWebView2WebResourceContext.Script,
-                CoreWebView2WebResourceContext.Image,
-                CoreWebView2WebResourceContext.XmlHttpRequest,
-                CoreWebView2WebResourceContext.Fetch,
-                CoreWebView2WebResourceContext.Ping,
-            })
-                core.AddWebResourceRequestedFilter("*", ctx);
+            foreach (var pattern in _adblock.UriFilters())
+                core.AddWebResourceRequestedFilter(pattern, CoreWebView2WebResourceContext.All,
+                    CoreWebView2WebResourceRequestSourceKinds.All);
 
         return core;
     }

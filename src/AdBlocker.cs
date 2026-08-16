@@ -34,6 +34,21 @@ public class AdBlocker
         catch { }
     }
 
+    /// <summary>
+    /// WebResourceRequested に登録するワイルドカードURL（1ドメイン1本）。
+    /// "*" で全サブリソースを拾うと1リクエストごとにUIスレッドへCOM往復が発生して読み込みが遅くなるため、
+    /// 「ブロック対象になりうるURLだけ」をブラウザ側のglob照合で先に絞る。
+    /// globはURI全体に対する素朴な照合なので `https://example.com/?u=doubleclick.net/` のような
+    /// 無関係なURLも拾いうるが、最終判定は <see cref="ShouldBlock"/> のホスト照合が行うので誤遮断にはならない
+    /// (余計に拾った分はCOM往復1回の無駄で済む)。
+    /// </summary>
+    public IEnumerable<string> UriFilters()
+    {
+        // "*://*<domain>/*" は apex(https://doubleclick.net/x) と
+        // サブドメイン(https://ads.doubleclick.net/x) の両方に一致する
+        foreach (var d in _domains) yield return "*://*" + d + "/*";
+    }
+
     public bool ShouldBlock(string uri)
     {
         if (_domains.Count == 0) return false;
@@ -88,6 +103,29 @@ yieldmo.com
 sonobi.com
 gumgum.com
 springserve.com
+adform.net
+flashtalking.com
+serving-sys.com
+contextweb.com
+lijit.com
+spotxchange.com
+spotx.tv
+improvedigital.com
+themediagrid.com
+zemanta.com
+2mdn.net
+mathtag.com
+bidr.io
+w55c.net
+stickyadstv.com
+smartclip.net
+emxdgt.com
+districtm.io
+undertone.com
+adcolony.com
+applovin.com
+inmobi.com
+smaato.net
 
 # --- 国内広告 (SSP/アドネットワーク) ---
 socdm.com
@@ -105,6 +143,11 @@ ad-stir.com
 deqwas.net
 logly.co.jp
 popin.cc
+yads.c.yimg.jp
+cxense.com
+ad-m.asia
+advg.jp
+xrost.jp
 
 # --- アクセス解析・行動トラッキング ---
 google-analytics.com
@@ -126,5 +169,35 @@ nr-data.net
 branch.io
 appsflyer.com
 adjust.com
+segment.io
+segment.com
+chartbeat.com
+chartbeat.net
+statcounter.com
+crazyegg.com
+luckyorange.com
+inspectlet.com
+smartlook.com
+optimizely.com
+bounceexchange.com
+parsely.com
+analytics.tiktok.com
+mc.yandex.ru
+
+# --- データ管理基盤 (DMP) / ID同期 ---
+demdex.net
+omtrdc.net
+2o7.net
+everesttech.net
+krxd.net
+bluekai.com
+crwdcntrl.net
+exelator.com
+rlcdn.com
+agkn.com
+tapad.com
+eyeota.net
+id5-sync.com
+adsymptotic.com
 """;
 }
