@@ -9,7 +9,7 @@
     <AssemblyName>Karu</AssemblyName>
     <RootNamespace>Karu</RootNamespace>
     <!-- ローカルビルド用の基準値。リリースは release.yml がタグ名 (v0.2.0 → 0.2.0) で上書きする -->
-    <Version>0.2.4</Version>
+    <Version>0.2.5</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>karu.ico</ApplicationIcon>
     <!-- ホスト側(WPF)の常駐メモリ削減: 併走GCスレッドを止める -->
@@ -19,9 +19,11 @@
     <SelfContained>false</SelfContained>
     <!-- 起動時のJIT量を減らす。実測: host WorkingSet 197→184MB・初回ウィンドウ表示も短縮 -->
     <PublishReadyToRun>true</PublishReadyToRun>
-    <!-- ICU(国際化データ)を読み込まない。文字列比較はすべて序数/InvariantCultureで、
-         カルチャ依存の照合・並べ替えは使っていないため影響しない -->
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- InvariantGlobalization は使わないこと。
+         WPFの内部(MS.Internal.FontCache.MajorLanguages)が new CultureInfo("en") を行うため、
+         invariantモードでは CultureNotFoundException でテキストのレイアウトごと落ちる
+         (v0.2.4で実際にタブ一覧オーバーレイの表示時にクラッシュした)。
+         アプリ側の文字列処理が序数比較だけでも、WPFがICUを必要とするので有効化できない。 -->
   </PropertyGroup>
 
   <ItemGroup>
