@@ -233,6 +233,29 @@
             </Border>
         </Border>
 
+        <!-- お気に入り一覧。閲覧ページへURL一覧を注入しないためWPF側で描画する -->
+        <Border x:Name="BookmarkListOverlay" Visibility="Collapsed" Background="#AA000000" Focusable="True"
+                MouseDown="BookmarkListOverlay_MouseDown">
+            <Border Background="#1A1A1A" CornerRadius="10" BorderBrush="#333333" BorderThickness="1"
+                    Padding="14" Width="520" HorizontalAlignment="Center" VerticalAlignment="Center"
+                    MouseDown="Overlay_Inner_MouseDown">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="20" ShadowDepth="4" Opacity="0.6"/>
+                </Border.Effect>
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,10">
+                        <TextBlock DockPanel.Dock="Right"
+                                   Text="j/k+Enter: 開く · Shift+Enter: 新しいタブ · b/Esc: 閉じる"
+                                   Foreground="#666666" FontSize="11"/>
+                        <TextBlock Text="BOOKMARKS" Foreground="#D4845E" FontSize="11"/>
+                    </DockPanel>
+                    <ScrollViewer MaxHeight="470" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="BookmarkListPanel"/>
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
+        </Border>
+
         <!-- メニュー & お気に入り -->
         <Popup x:Name="MenuPopup" StaysOpen="False" Placement="Bottom" AllowsTransparency="True"
                PlacementTarget="{Binding ElementName=MenuBtn}" HorizontalOffset="-300">
@@ -276,7 +299,9 @@
                     <Button x:Name="FocusMenuBtn" Style="{StaticResource MenuItemButton}"
                             Content="動画集中モード: ON（クリックでOFF）" Click="Focus_Click"/>
                     <Button x:Name="QualityMenuBtn" Style="{StaticResource MenuItemButton}"
-                            Content="画質上限: 1080p" Click="Quality_Click"/>
+                             Content="画質上限: 1080p" Click="Quality_Click"/>
+                    <Button x:Name="NetworkMenuBtn" Style="{StaticResource MenuItemButton}"
+                            Content="検閲回避: プロキシ OFF" Click="OpenConfig_Click"/>
                     <Button Style="{StaticResource MenuItemButton}"
                             Content="メモリ使用量を表示" Click="MemInfo_Click"/>
                     <Button Style="{StaticResource MenuItemButton}"

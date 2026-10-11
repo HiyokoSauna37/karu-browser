@@ -1,4 +1,3 @@
-using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Collections.Concurrent;
@@ -28,7 +27,7 @@ namespace Karu;
 /// 取り直し先も広告を引くことがある (プリロールの頻度キャップ次第) ので数回試し、
 /// それでも駄目なら諦めて元の中身を返す — その場合はページ側で消音+被いを出す。
 /// </summary>
-sealed class TwitchAds
+sealed class TwitchAds : IDisposable
 {
     const string AdMarker = "CLASS=\"twitch-stitched-ad\"";
 
@@ -38,16 +37,11 @@ sealed class TwitchAds
     /// <summary>覚えておくプレイリストの上限 (長時間の視聴で辞書が際限なく育たないように)。</summary>
     const int MaxTracked = 512;
 
-    // 圧縮応答をそのまま文字列化して壊さないよう自動展開を有効にする
-    static readonly HttpClient Http = new(new HttpClientHandler
-    {
-        AutomaticDecompression = DecompressionMethods.All,
-    })
-    {
-        Timeout = TimeSpan.FromSeconds(8),
-        DefaultRequestVersion = HttpVersion.Version20,
-        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-    };
+    readonly HttpClient _http;
+
+    public TwitchAds(HttpClient http) => _http = http;
+
+    public void Dispose() => _http.Dispose();
 
     // 画質名の入る属性はマスターの版で違う:
     //   v1 (usher/api/channel/hls/...)    → VIDEO="720p60"
@@ -64,10 +58,22 @@ sealed class TwitchAds
     readonly record struct Variant(string Usher, string Name, int Index);
 
     public static bool IsUsher(string uri)
-        => uri.Contains("usher.ttvnw.net/api/", StringComparison.Ordinal);
+        => IsTrustedUri(uri, "usher.ttvnw.net", "/api/");
 
     public static bool IsMediaPlaylist(string uri)
-        => uri.Contains(".playlist.ttvnw.net/v1/playlist/", StringComparison.Ordinal);
+    {
+        if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) ||
+            parsed.Scheme != Uri.UriSchemeHttps ||
+            !parsed.Host.EndsWith(".playlist.ttvnw.net", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return parsed.AbsolutePath.StartsWith("/v1/playlist/", StringComparison.Ordinal);
+    }
+
+    static bool IsTrustedUri(string value, string host, string pathPrefix)
+        => Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+           uri.Scheme == Uri.UriSchemeHttps &&
+           uri.Host.Equals(host, StringComparison.OrdinalIgnoreCase) &&
+           uri.AbsolutePath.StartsWith(pathPrefix, StringComparison.Ordinal);
 
     public static bool HasAd(string playlist)
         => playlist.Contains(AdMarker, StringComparison.Ordinal);
@@ -121,6 +127,7 @@ sealed class TwitchAds
             if (freshBody is null || !freshBody.StartsWith("#EXTM3U", StringComparison.Ordinal)) continue;
             if (HasAd(freshBody)) continue;            // 取り直し先もプリロールを引いた → もう一度
 
+            if (_swapped.Count >= MaxTracked) _swapped.Clear();
             _swapped[uri] = fresh;
             return (freshBody, false);
         }
@@ -180,11 +187,11 @@ sealed class TwitchAds
         return urls[0].Url;
     }
 
-    static async Task<string?> GetAsync(string uri)
+    async Task<string?> GetAsync(string uri)
     {
         try
         {
-            using var res = await Http.GetAsync(uri);
+            using var res = await _http.GetAsync(uri);
             if (!res.IsSuccessStatusCode) return null;
             return await res.Content.ReadAsStringAsync();
         }

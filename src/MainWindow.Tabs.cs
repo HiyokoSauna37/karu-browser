@@ -40,6 +40,17 @@ public partial class MainWindow
         return tab;
     }
 
+    /// <summary>セッション復元用。WebView2を作らずURLだけを持つ休眠タブを追加する。</summary>
+    void AddSleepingTab(string url)
+    {
+        var normalized = UrlUtil.Normalize(url);
+        var title = Uri.TryCreate(normalized, UriKind.Absolute, out var uri) && uri.Host.Length > 0
+            ? uri.Host : normalized;
+        var tab = new BrowserTab { Title = title };
+        tab.Detach(normalized, 0);
+        Tabs.Add(tab);
+    }
+
     /// <summary>タブへ新しい WebView を生成・装着して初期化する(新規タブと休眠復帰の共通部)。
     /// 初期化完了前にタブが閉じられた場合は null を返す。</summary>
     async Task<CoreWebView2?> MountViewAsync(BrowserTab tab)
@@ -111,11 +122,16 @@ public partial class MainWindow
     {
         try
         {
-            EmptyWorkingSet(Process.GetCurrentProcess().Handle);
+            using var host = Process.GetCurrentProcess();
+            EmptyWorkingSet(host.Handle);
             var env = await GetEnvAsync();
             foreach (var pi in env.GetProcessInfos())
             {
-                try { EmptyWorkingSet(Process.GetProcessById(pi.ProcessId).Handle); }
+                try
+                {
+                    using var process = Process.GetProcessById(pi.ProcessId);
+                    EmptyWorkingSet(process.Handle);
+                }
                 catch { /* 直前に終了したプロセス */ }
             }
         }

@@ -20,6 +20,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Core checks
+        shell: pwsh
+        run: dotnet run --project tests/Karu.Tests.csproj -c Release
+
       - name: Publish
         shell: pwsh
         run: |

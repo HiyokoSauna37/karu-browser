@@ -342,7 +342,7 @@ static class Injections
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   window.__karuFocus = {{(focusMode ? "true" : "false")}};
-  window.__karuMaxQ = '{{maxQuality}}';
+  window.__karuMaxQ = {{System.Text.Json.JsonSerializer.Serialize(maxQuality)}};
 
   const HIDE = [
     '#secondary', '#related', 'ytd-watch-next-secondary-results-renderer',
@@ -584,89 +584,6 @@ static class Injections
   };
   window.__karuTwitchAd = on => { try { on ? show() : hide(); } catch (e) { hide(); } };
 })();
-""";
-
-    /// <summary>ブックマーク一覧オーバーレイ。{0} に JSON 配列 [{title,url},...] を埋め込む。
-    /// キー=直接開く / j·k(↑↓)=選択移動 / Enter=選択を開く / Shift併用=新しいタブ。</summary>
-    public static string BookmarkOverlay => BookmarkOverlaySrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
-
-    const string BookmarkOverlaySrc = """
-(function(){
-  if(document.getElementById('__karuBM')) return;
-  var bm = {0};
-  if(!bm.length){ return; }
-  var keys = '1234567890acdefghilmnopqrstuvwyz'.split(''); // j/k は選択移動、b は閉じるキーに予約
-  var bg = document.createElement('div');
-  bg.id = '__karuBM';
-  bg.style.cssText = 'position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.6);' +
-    'display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)';
-  var box = document.createElement('div');
-  box.style.cssText = 'background:rgba(17,17,17,.97);border:1px solid #333;border-radius:12px;' +
-    'padding:16px 20px;max-width:480px;width:90vw;max-height:70vh;overflow-y:auto;' +
-    'font:14px "Segoe UI","Yu Gothic UI",sans-serif;color:#ddd;box-shadow:0 8px 32px rgba(0,0,0,.5)';
-  var hdr = document.createElement('div');
-  hdr.style.cssText = 'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px';
-  var ttl = document.createElement('span');
-  ttl.textContent = 'Bookmarks';
-  ttl.style.cssText = 'font-size:11px;color:#D4845E;letter-spacing:2px;text-transform:uppercase';
-  var hint = document.createElement('span');
-  hint.textContent = 'j/k: 選択 · Enter: 開く · Shift: 新しいタブ · b/Esc: 閉じる';
-  hint.style.cssText = 'font-size:11px;color:#777';
-  hdr.appendChild(ttl);
-  hdr.appendChild(hint);
-  box.appendChild(hdr);
-  var map = {};
-  var rows = [];
-  var sel = 0;
-  function setSel(i){
-    sel = (i + rows.length) % rows.length;
-    for(var r=0;r<rows.length;r++) rows[r].style.background = r===sel ? '#2A2A2A' : 'transparent';
-    if(rows[sel].scrollIntoView) rows[sel].scrollIntoView({block:'nearest'});
-  }
-  bm.forEach(function(b,i){
-    var k = i < keys.length ? keys[i] : '';
-    if(k) map[k] = b.url;
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:6px;cursor:pointer';
-    row.onmouseenter = function(){ setSel(i); };
-    row.onclick = function(ev){ go(b.url, ev.shiftKey); };
-    var badge = document.createElement('span');
-    badge.textContent = k;
-    badge.style.cssText = 'display:inline-block;width:20px;height:20px;line-height:20px;text-align:center;' +
-      'font:bold 12px Consolas,monospace;color:#D4845E;border:1px solid #D4845E;border-radius:4px;flex-shrink:0';
-    if(!k) badge.style.visibility = 'hidden'; // キーがあふれた行はj/k選択とマウスで開く
-    var title = document.createElement('span');
-    title.textContent = b.title;
-    title.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
-    row.appendChild(badge);
-    row.appendChild(title);
-    rows.push(row);
-    box.appendChild(row);
-  });
-  bg.appendChild(box);
-  document.documentElement.appendChild(bg);
-  setSel(0);
-  function close(){ bg.remove(); document.removeEventListener('keydown',onKey,true); }
-  function go(url, newTab){
-    close();
-    try{window.chrome.webview.postMessage('__KARU_MSG_TOKEN__|'+(newTab?'bookmarkGoNew:':'bookmarkGo:')+url);}catch(e){}
-  }
-  function onKey(e){
-    e.preventDefault(); e.stopImmediatePropagation();
-    if(e.key==='Escape' || e.code==='KeyB'){ close(); return; } // bで開いた一覧はbで閉じる(トグル)
-    if(e.key==='Enter'){ go(bm[sel].url, e.shiftKey); return; }
-    // Shift押下時も動くよう、文字キーは物理キー(e.code)で判定する
-    if(e.key==='ArrowDown' || e.code==='KeyJ'){ setSel(sel+1); return; }
-    if(e.key==='ArrowUp' || e.code==='KeyK'){ setSel(sel-1); return; }
-    var k = '';
-    if(/^Digit\d$/.test(e.code)) k = e.code.slice(5);
-    else if(/^Key[A-Z]$/.test(e.code)) k = e.code.slice(3).toLowerCase();
-    else if(e.key.length===1) k = e.key.toLowerCase();
-    if(map[k]) go(map[k], e.shiftKey);
-  }
-  document.addEventListener('keydown',onKey,true);
-  bg.addEventListener('click',function(e){ if(e.target===bg) close(); });
-})()
 """;
 
     /// <summary>
@@ -925,9 +842,6 @@ static class Injections
 
   addEventListener('keydown', e => {
     if (e.isComposing || e.keyCode === 229) return;
-    // ブックマーク一覧オーバーレイ表示中は全キーをそちらに任せる
-    // (このハンドラはwindowキャプチャで先に走るため、譲らないとj/k等を横取りしてしまう)
-    if (document.getElementById('__karuBM')) return;
     if (hint) { block(e); hintKey(e); return; }
     if (inInput(e)) return;
     // Ctrl+Tab: タブ一覧 (ホスト側でも処理するが、ページ内フォーカス移動を確実に抑止するため二重化)。

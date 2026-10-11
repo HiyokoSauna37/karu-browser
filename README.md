@@ -4,7 +4,7 @@
   <img src="assets/banner.png" width="430" alt="Karu">
 </p>
 
-<p align="center">A lightweight, keyboard-first Windows browser built for watching video without your RAM disappearing.</p>
+<p align="center">A lightweight, keyboard-first Windows browser with configurable proxy routing.</p>
 
 <p align="center">
   <a href="../../releases"><img src="https://img.shields.io/github/v/release/HiyokoSauna37/karu-browser?label=release&color=E8672E" alt="Latest release"></a>
@@ -29,7 +29,7 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 ## Features
 
 - **Chromeless UI** — no tab bar, no URL bar. Everything is a keyboard overlay or a single 40px title bar.
-- **3-stage tab lifecycle** — Active → Suspended (WebView2 `TrySuspendAsync`, ~15s after losing focus) → Hibernated (WebView fully disposed, only URL + video position kept, ~3–10 min depending on tab "warmth"). An emergency hibernation kicks in when available system memory drops below a threshold. Audio-playing tabs are never touched.
+- **3-stage tab lifecycle** — Active → Suspended (WebView2 `TrySuspendAsync`, ~15s after losing focus) → Hibernated (WebView fully disposed, only URL + video position kept, ~3–10 min depending on tab "warmth"). On session restore, only the visible tab is materialized; the rest start hibernated to avoid a startup memory spike. An emergency hibernation kicks in when available system memory drops below a threshold. Audio-playing tabs are never touched.
 - **Vim-style keyboard layer** — injected into every page: `j/k/h/l` scroll, `d/u` half-page, `gg/G` top/bottom, `f/F` link hints, `H/L` back/forward, `yy` copy URL, `?` help overlay, and more.
 - **Keyboard-driven tab list** (`Ctrl+Tab`) and **bookmark list** (`b`) — both support `j/k` + `Enter` to select, and toggle closed by pressing the same key again.
 - **YouTube-focused tuning** — in-player ad skipping, playback quality cap, forced H.264 (avoids VP9/AV1 decode cost), a "focus mode" that hides comments/related/shorts shelves, and an on-player speed button.
@@ -37,7 +37,8 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 - **Translate the page** (`Ctrl+Shift+Y`) — like Chrome's "Translate this page": rewrites the body into Japanese in place; press again to flip back (translation ⇄ original toggle). Links and `<code>` are kept intact and repositioned to the correct Japanese word order. See [Translating pages](#translating-pages).
 - **Pop a tab into its own window** (`Ctrl+Shift+D`) — moves the current tab into a new window, for side-by-side viewing.
 - **Presents as a normal browser** — hides `navigator.webdriver` and scopes the low-spec spoof to YouTube only, so bot checks like Cloudflare are less likely to flag it as automated.
-- **Ad/tracker blocking** — a built-in domain blocklist (`%APPDATA%\Karulocklist.txt`). **Sideloaded extensions cannot do this**: WebView2 runs no content scripts, and MV2 `webRequest` blocking has no effect either — measured, with uBlock Origin loaded and blocking nothing while costing memory.
+- **Censorship-routing controls** — supports HTTP(S)/SOCKS5 proxies. Page traffic, translation, and Twitch interception use the same proxy. While a proxy is active, non-proxied WebRTC UDP and QUIC are disabled to avoid a direct IP leak.
+- **Ad/tracker blocking** — a built-in domain blocklist (`%APPDATA%\Karu\blocklist.txt`). **Sideloaded extensions cannot do this**: WebView2 runs no content scripts, and MV2 `webRequest` blocking has no effect either — measured, with uBlock Origin loaded and blocking nothing while costing memory.
 - **Twitch ad removal** — Twitch stitches ads into the same HLS stream as the broadcast (server-side ad insertion), so domain blocking cannot touch them. Karu watches the playlist for ad markers and swaps in a freshly fetched, clean playlist instead. Verified against real mid-rolls on a live channel (43 detections, 43 successful swaps, original quality preserved). **This only defeats mid-rolls.** A pre-roll at stream open cannot be dodged this way, because the replacement session draws a pre-roll of its own. Ads that cannot be replaced are muted and covered over the player area only (never the whole page). Turn it off with `TwitchAdBlock` in `settings.json`.
 - **Session restore, saved passwords/autofill, bookmarks.**
 - **Caret browsing, video fullscreen via CDP, live memory usage breakdown.**
@@ -109,13 +110,29 @@ The result is a framework-dependent build in `dist/` (requires the .NET 10 Deskt
 
 ## Configuration
 
-Settings, bookmarks, the ad blocklist, and sideloaded extensions all live in `%APPDATA%\Karu`. WebView2's own profile data (cookies, login sessions) is under `%LOCALAPPDATA%\Karu\WebView2Data`. Open the settings folder from the in-app menu (top-right `≡` button).
+Settings, bookmarks, the ad blocklist, and sideloaded extensions all live in `%APPDATA%\Karu`. WebView2's own profile data (cookies, login sessions) is under `%LOCALAPPDATA%\Karu\WebView2Data`. Open the settings folder from the in-app menu (top-right `≡` button). `settings.json` is created on first launch; restart Karu after changing network settings.
+
+Example censorship-routing settings:
+
+```json
+{
+  "ProxyServer": "socks5://127.0.0.1:9050",
+  "EnableBrowserProtections": true
+}
+```
+
+- `ProxyServer`: `http://host:port`, `https://host:port`, or `socks5://host:port`. Leave empty to use the system route. Embedded credentials are rejected so they cannot leak through process listings.
+- `EnableBrowserProtections`: the default `true` keeps site isolation, SmartScreen, and WebView2 tracking prevention enabled. `false` restores the older, more aggressive low-memory setup and is not recommended for browsing arbitrary sites.
+
+While `ProxyServer` is active, handoff to external mpv or Edge is disabled because Karu cannot guarantee that those processes inherit its route. Leave it empty when using a system-wide VPN if you need those integrations.
+
+Karu does not ship a relay service. Bypassing DNS/IP/SNI-level blocks requires a reachable external proxy, VPN, or Tor that also resolves destination names remotely. WebView2 has no supported per-app DoH API, so Karu does not claim DoH support through Chromium-internal flags that may be ignored.
 
 Unpacked Chromium extensions under `%APPDATA%\Karu\extensions\` are loaded, but **do not put an ad blocker there**. WebView2 runs neither content scripts nor MV2 `webRequest` blocking, so it blocks nothing — and the mere presence of an extension disables the built-in blocklist (measured: ~105 MB for the extension renderer alone, zero requests blocked).
 
 ## A note on SmartScreen
 
-Karu disables some Chromium telemetry/protection flags (including its own SmartScreen integration) as part of its low-memory tuning, and injects scripts into every page for the Vim layer and YouTube tweaks. That's normal for this project, but it's also the kind of behavior heuristic antivirus/SmartScreen sometimes flags on unsigned, low-reputation binaries — hence the warning on first run. Building from source (above) avoids that entirely.
+Karu keeps WebView2's SmartScreen integration, site isolation, and tracking prevention enabled by default. The Windows “unrecognized app” warning on first launch is separate: it appears because the distributed binary is unsigned and has little reputation. You can build from source using the instructions above if preferred.
 
 ## License
 

@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Net.Http;
 using System.Text;
 using System.Windows;
 using System.Windows.Input;
@@ -22,8 +23,9 @@ public partial class MainWindow : Window
 
     readonly BookmarkStore _bookmarks = new();
     readonly AdBlocker _adblock = new();
-    readonly TwitchAds _twitchAds = new();
     readonly AppSettings _settings = SettingsStore.Load();
+    readonly TwitchAds _twitchAds;
+    readonly HttpClient _translateHttp;
     readonly DispatcherTimer _sleepTimer;
     readonly List<string> _closedUrls = new();
     readonly bool _useBuiltinBlock; // 拡張(uBlock)が無いときだけ簡易ブロッカーを使う
@@ -46,6 +48,9 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        // WebView2外の通信もブラウザと同じプロキシ経路へ揃える。
+        _twitchAds = new TwitchAds(NetworkRouting.CreateHttpClient(_settings, TimeSpan.FromSeconds(8)));
+        _translateHttp = NetworkRouting.CreateHttpClient(_settings, TimeSpan.FromSeconds(20));
         InitializeComponent();
         // 150%スケーリング環境などで「元のサイズ」が画面からはみ出さないように制限
         var wa = SystemParameters.WorkArea;
@@ -56,6 +61,7 @@ public partial class MainWindow : Window
             .Any(d => File.Exists(Path.Combine(d, "manifest.json")));
         RefreshFocusUi();
         RefreshQualityUi();
+        RefreshNetworkUi();
         Loaded += OnLoaded;
         Closing += OnClosing;
         PreviewKeyDown += OnPreviewKeyDown;
@@ -116,10 +122,18 @@ public partial class MainWindow : Window
         _adblock.Load();
         var urls = ((App)Application.Current).LaunchUrls;
         if (urls.Length == 0) urls = SessionStore.Load();
+        // 壊れた/手編集されたセッションで無制限にタブを生成しない。
+        urls = urls.Where(u => !string.IsNullOrWhiteSpace(u)).TakeLast(100).ToArray();
         try
         {
             if (urls.Length == 0) await AddTabAsync(null);
-            else foreach (var u in urls) await AddTabAsync(u);
+            else
+            {
+                // 全セッションタブの WebView を一斉生成すると起動時だけRAMが跳ねる。
+                // 従来どおり最後のタブだけを表示し、それ以前は最初から休眠状態で復元する。
+                foreach (var u in urls[..^1]) AddSleepingTab(u);
+                await AddTabAsync(urls[^1]);
+            }
         }
         catch (Exception ex)
         {
@@ -131,10 +145,14 @@ public partial class MainWindow : Window
 
     void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        _sleepTimer.Stop();
+        _flameTimer.Stop();
         SessionStore.Save(Tabs
             .Select(t => TabUrl(t) ?? "")
             .Where(u => u.Length > 0 && u != "about:blank"));
         foreach (var t in Tabs) t.View?.Dispose();
+        _twitchAds.Dispose();
+        _translateHttp.Dispose();
     }
 
     /// <summary>タブの現在URL。休眠中は保持しているURLを返す。</summary>
@@ -157,7 +175,7 @@ public partial class MainWindow : Window
                 //   process-per-site + renderer-process-limit=4: プロセス数を抑える。
                 //     ※2まで絞るとWarmTabs+アクティブでプロセス共有が常態化し、遷移先ページが
                 //       稼働中サイト(YouTube等)のレンダラー主スレッドを奪い合って遷移が重くなる
-                //   disable-site-isolation-trials: クロスサイトiframe用の別レンダラーを作らない
+                //   サイト分離は安全性のため既定で維持。明示的な低メモリ設定時だけ無効化
                 //   disk-cache-size/media-cache-size: ディスクキャッシュを128MB/50MBに制限
                 //   QuickIntensiveWakeUpThrottling...: 非表示ページのタイマーを早期に間引く(サスペンド発動までのつなぎ)
                 //   disable-renderer-accessibility: UIA走査によるアクセシビリティツリー構築を止める(スクリーンリーダー非対応化)
@@ -169,7 +187,7 @@ public partial class MainWindow : Window
                 //   GlobalMediaControls,LiveCaption無効: メディア操作UI・ライブ字幕MLを止める
                 //   AutofillServerCommunication無効: 入力補完のサーバー照会を止める(ローカル補完は残る)
                 //   SegmentationPlatform無効: 利用予測MLを止める
-                //   msSmartScreenProtection無効: SmartScreen常駐プロセスを止める(フィッシング警告も消える)
+                //   SmartScreen/追跡防止も既定で維持。任意サイトを開くブラウザでは保護を優先する
                 //   ※ --enable-low-end-device-mode と --js-flags=--optimize-for-size は、表示中タブの
                 //     V8実行やキャッシュまで遅くしてURL遷移の体感が悪化するため使わない
                 //     (裏タブのメモリはサスペンド/休眠側で回収済みで、これらの追加削減効果は小さい)
@@ -182,32 +200,15 @@ public partial class MainWindow : Window
                 //      「WidevineCdm コンポーネント」として登録される。実体はランタイム同梱
                 //      (EdgeWebView\Application\<ver>\WidevineCdm) でダウンロードは不要だが、
                 //      component update 自体を切ると登録処理ごと飛ばされて CDM が見つからなくなる。
-                //      ※ --disable-background-networking は残してよい (更新チェックの通信は止まったまま)。
+                //      ※保護ON時はバックグラウンド通信も維持。保護OFFの旧低メモリ設定時だけ止める。
                 //   ①②どちらか欠けると U-NEXT は「再生エラーが発生しました。（sh_6012）」になる。
-                AdditionalBrowserArguments =
-                    "--autoplay-policy=no-user-gesture-required " +
-                    // 自動化ブラウザに見えて Cloudflare 等のボット判定に弾かれるのを防ぐ:
-                    // navigator.webdriver を実ブラウザ同様に消す(ネイティブなフラグなので JS 改ざん痕は残らない)
-                    "--disable-blink-features=AutomationControlled " +
-                    "--process-per-site --renderer-process-limit=4 " +
-                    "--disable-site-isolation-trials " +
-                    "--disk-cache-size=134217728 --media-cache-size=52428800 --disable-sync " +
-                    "--disable-background-networking " +
-                    "--disable-domain-reliability --disable-breakpad --no-pings " +
-                    "--disable-renderer-accessibility --disable-notifications " +
-                    "--disable-speech-api --disable-print-preview " +
-                    "--disable-component-extensions-with-background-pages " +
-                    "--enable-features=QuickIntensiveWakeUpThrottlingAfterLoading," +
-                    "NetworkServiceInProcess,NetworkServiceInProcess2,msWidevinePlatform " +
-                    "--disable-features=BackForwardCache,Translate,OptimizationHints,msSmartScreenProtection," +
-                    "Prerender2,NoStatePrefetch,MediaRouter,DialMediaRouteProvider," +
-                    "GlobalMediaControls,LiveCaption,AutofillServerCommunication,SegmentationPlatform," +
-                    "AudioServiceOutOfProcess" +
-                    (_settings.CaretBrowsing ? " --enable-caret-browsing" : ""),
+                // 自動化誤判定対策・軽量化・proxyを一か所で構成する。
+                // サイト分離/SmartScreenを切る旧設定は EnableBrowserProtections=false の場合だけ。
+                AdditionalBrowserArguments = BrowserOptions.BuildArguments(_settings),
                 // 拡張(uBlock等)が置かれていないときは拡張基盤ごと起動しない
                 AreBrowserExtensionsEnabled = !_useBuiltinBlock,
-                // 内蔵トラッキング防止エンジンを止めてメモリ削減 (トラッカー遮断は blocklist.txt 側で実施)
-                EnableTrackingPrevention = false,
+                // Microsoft は任意サイトを開く WebView2 ブラウザでは有効化を推奨している。
+                EnableTrackingPrevention = _settings.EnableBrowserProtections,
             });
 
     /// <summary>%APPDATA%\Karu\extensions 直下の展開済み拡張をプロファイルにインストールする（初回のみ）</summary>
@@ -244,7 +245,7 @@ public partial class MainWindow : Window
     {
         var env = await GetEnvAsync();
         try { await view.EnsureCoreWebView2Async(env); }
-        catch { return null; } // 初期化完了前にタブが閉じられた場合
+        catch when (!Tabs.Contains(tab)) { return null; } // 初期化完了前にタブが閉じられた場合だけ無視
 
         var core = view.CoreWebView2;
         if (core is null) return null;
@@ -427,25 +428,9 @@ public partial class MainWindow : Window
         string? raw = null;
         try { raw = args.TryGetWebMessageAsString(); } catch { }
         // 注入スクリプト由来の証明としてトークン接頭辞を検証する。
-        // これが無いと任意のページのJSが postMessage('bookmarkGo:...') 等で
-        // 強制ナビゲーションやタブ操作を行えてしまう
+        // これが無いと任意のページのJSがタブ操作コマンドを偽装できてしまう。
         if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
         var cmd = raw[(Injections.MessageToken.Length + 1)..];
-        const string goNew = "bookmarkGoNew:", go = "bookmarkGo:";
-        if (cmd.StartsWith(goNew))
-        {
-            // オーバーレイはページ読み込み後に注入するためトークン窃取の余地が理論上残る。
-            // 実在するお気に入りのURLしか開かないことで、盗めても実害を無くす
-            var url = cmd[goNew.Length..];
-            if (_bookmarks.Contains(url)) _ = AddTabAsync(url);
-            return;
-        }
-        if (cmd.StartsWith(go))
-        {
-            var url = cmd[go.Length..];
-            if (_bookmarks.Contains(url)) Navigate(tab, url);
-            return;
-        }
         switch (cmd)
         {
             case "tabClose": CloseTab(tab); break;
@@ -455,7 +440,7 @@ public partial class MainWindow : Window
             case "tabNew": _ = AddTabAsync(null); break;
             case "focusUrl": ShowUrlOverlay(); break;
             case "tabList": ShowTabOverlay(); break;
-            case "bookmarkList": ShowBookmarkOverlay(tab); break;
+            case "bookmarkList": ShowBookmarkOverlay(); break;
             case "mpvReturn": MpvReturn(tab); break;
         }
     }
@@ -465,6 +450,13 @@ public partial class MainWindow : Window
         bool ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
         bool shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        if (BookmarkListOverlay.Visibility == Visibility.Visible)
+        {
+            HandleBookmarkOverlayKey(key, shift, ctrl);
+            e.Handled = true;
+            return;
+        }
 
         // タブ一覧オーバーレイ表示中はそちらでキーを処理する
         if (TabOverlay.Visibility == Visibility.Visible)
@@ -507,8 +499,9 @@ public partial class MainWindow : Window
         if (exe is null) return;
         var urls = Tabs.Select(t => TabUrl(t) ?? "")
                        .Where(u => u.Length > 0 && u != "about:blank");
-        var args = string.Join(" ", urls.Select(u => $"\"{u}\""));
-        Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = true });
+        var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+        foreach (var url in urls) psi.ArgumentList.Add(url);
+        Process.Start(psi);
         Close();
     }
 

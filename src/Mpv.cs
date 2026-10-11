@@ -44,19 +44,27 @@ static class Mpv
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Microsoft\WinGet\Links");
         var ytdlp = new[] { Path.Combine(links, "yt-dlp.exe"), FindWinGetExe("yt-dlp.exe") }
             .FirstOrDefault(p => p is not null && File.Exists(p));
-        var args = ytdlp is not null ? $"--script-opts=ytdl_hook-ytdl_path=\"{ytdlp}\" " : "";
+        var args = new List<string>();
+        if (ytdlp is not null) args.Add("--script-opts=ytdl_hook-ytdl_path=" + ytdlp);
         if (isLive)
-            args += "--demuxer-max-bytes=256MiB --cache=yes ";
+        {
+            args.Add("--demuxer-max-bytes=256MiB");
+            args.Add("--cache=yes");
+        }
         else if (startSeconds > 5)
-            args += $"--start={(int)startSeconds} ";
-        args += $"--force-window=immediate \"{url}\"";
+            args.Add($"--start={(int)startSeconds}");
+        args.Add("--force-window=immediate");
+        args.Add("--"); // URL が -- で始まっても mpv のオプションとして解釈させない
+        args.Add(url);
 
         foreach (var exe in new[] { "mpv.exe", Path.Combine(links, "mpv.exe"), FindWinGetExe("mpv.exe"), "mpvnet.exe" })
         {
             if (exe is null) continue;
             try
             {
-                return Process.Start(new ProcessStartInfo(exe, args) { UseShellExecute = true });
+                var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+                foreach (var arg in args) psi.ArgumentList.Add(arg);
+                return Process.Start(psi);
             }
             catch { }
         }

@@ -15,13 +15,6 @@ namespace Karu;
 /// </summary>
 static class Translator
 {
-    static readonly HttpClient Http = new()
-    {
-        Timeout = TimeSpan.FromSeconds(20),
-        // 並列リクエストを 1 本の TLS コネクションへ多重化する(接続確立コストを 1 回に抑える)
-        DefaultRequestVersion = HttpVersion.Version20,
-        DefaultVersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
-    };
     const string Base = "https://translate.googleapis.com/translate_a/single";
 
     /// <summary>1 リクエストにまとめる q 文字列の目安上限。q は POST ボディで送るため URL 長の制約は
@@ -81,7 +74,7 @@ static class Translator
     /// インスタンス。未完了セグメントは "")で呼ぶ — 届いた分から順次 DOM へ反映する用。
     /// </summary>
     public static async Task<(string[] Translations, string? Detected, bool Partial)> TranslateAsync(
-        string[] segments, string to = "ja", string from = "auto",
+        HttpClient http, string[] segments, string to = "ja", string from = "auto",
         Func<string[], Task>? onProgress = null)
     {
         var translations = new string[segments.Length];
@@ -135,7 +128,7 @@ static class Translator
             {
                 if (!TryBook()) return;
                 var joined = string.Join("\n", idxs.Select(i => segments[i].Trim()));
-                var (text, d) = await ChunkAsync(joined, to, from);
+                var (text, d) = await ChunkAsync(http, joined, to, from);
                 Note(d);
                 var parts = text.Split('\n');
                 if (parts.Length == idxs.Count)
@@ -152,7 +145,7 @@ static class Translator
                     foreach (var i in idxs)
                     {
                         if (!TryBook()) return;
-                        var (t2, d2) = await ChunkAsync(segments[i].Trim(), to, from);
+                        var (t2, d2) = await ChunkAsync(http, segments[i].Trim(), to, from);
                         translations[i] = t2;
                         MemoSet(MemoKey(from, to, segments[i].Trim()), t2, d2);
                         Note(d2);
@@ -186,7 +179,7 @@ static class Translator
                 foreach (var s in slices)
                 {
                     if (!TryBook()) return;
-                    var (t, d) = await ChunkAsync(s, to, from);
+                    var (t, d) = await ChunkAsync(http, s, to, from);
                     sb.Append(t);
                     det ??= d;
                     Note(d);
@@ -214,7 +207,7 @@ static class Translator
     static readonly SemaphoreSlim Gate = new(MaxParallel);
 
     /// <summary>gtx へのリクエストを 1 回組み立てて送る(HttpRequestMessage は使い回せないため都度生成)。</summary>
-    static async Task<HttpResponseMessage> SendGtxAsync(string text, string to, string from)
+    static async Task<HttpResponseMessage> SendGtxAsync(HttpClient http, string text, string to, string from)
     {
         var url = $"{Base}?client=gtx&sl={Uri.EscapeDataString(from)}&tl={Uri.EscapeDataString(to)}&dt=t";
         using var req = new HttpRequestMessage(HttpMethod.Post, url)
@@ -223,19 +216,20 @@ static class Translator
                                         "application/x-www-form-urlencoded"),
         };
         req.Headers.TryAddWithoutValidation("User-Agent", "Mozilla/5.0");
-        return await Http.SendAsync(req);
+        return await http.SendAsync(req);
     }
 
     /// <summary>gtx エンドポイントへ 1 リクエスト送り、翻訳文と検出言語を返す。</summary>
-    static async Task<(string Text, string? Detected)> ChunkAsync(string text, string to, string from)
+    static async Task<(string Text, string? Detected)> ChunkAsync(
+        HttpClient http, string text, string to, string from)
     {
-        var res = await SendGtxAsync(text, to, from);
+        var res = await SendGtxAsync(http, text, to, from);
         if ((int)res.StatusCode == 429 || (int)res.StatusCode >= 500)
         {
             // 無料エンドポイントの一時的なレート制限/瞬断は間を置いて 1 回だけ再試行する
             res.Dispose();
             await Task.Delay(RetryDelayMs);
-            res = await SendGtxAsync(text, to, from);
+            res = await SendGtxAsync(http, text, to, from);
         }
         using var _ = res;
         res.EnsureSuccessStatusCode();

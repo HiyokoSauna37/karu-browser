@@ -69,7 +69,7 @@ public class AdBlocker
     const string DefaultList = """
 # Karu 広告・トラッカー ブロックリスト
 # 1行1ドメイン。サブドメインも自動的に対象。# で始まる行はコメント。
-# サイトが壊れたら該当行を消すか、ツールバーの盾ボタンで一時的にOFFにできます。
+# サイトが壊れたら該当行を消して Karu を再起動してください。
 
 # --- 広告ネットワーク ---
 doubleclick.net

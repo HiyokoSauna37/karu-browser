@@ -19,7 +19,8 @@ public partial class MainWindow
     bool IsOverlayOpen =>
         StarOverlay.Visibility == Visibility.Visible ||
         UrlOverlay.Visibility == Visibility.Visible ||
-        TabOverlay.Visibility == Visibility.Visible;
+        TabOverlay.Visibility == Visibility.Visible ||
+        BookmarkListOverlay.Visibility == Visibility.Visible;
 
     void HideActiveViewForOverlay()
     {
@@ -134,6 +135,8 @@ public partial class MainWindow
     void CloseTabOverlay()
     {
         TabOverlay.Visibility = Visibility.Collapsed;
+        TabListPanel.Children.Clear();
+        _tabRows.Clear();
         RestoreActiveViewAfterOverlay();
     }
 
@@ -319,15 +322,127 @@ public partial class MainWindow
         else if (e.Key == Key.Escape) { CloseStarOverlay(); e.Handled = true; }
     }
 
-    /// <summary>Vim層の b キー: ページ内にお気に入り一覧オーバーレイを出す</summary>
-    async void ShowBookmarkOverlay(BrowserTab tab)
+    // ---- お気に入り一覧 (b) ----
+
+    const string BookmarkKeys = "1234567890acdefghilmnopqrstuvwyz";
+    readonly List<System.Windows.Controls.Border> _bookmarkRows = new();
+    int _bookmarkSel;
+
+    /// <summary>ページへURL一覧を渡さず、WPF側だけでお気に入り一覧を表示する。</summary>
+    async void ShowBookmarkOverlay()
     {
-        var core = tab.View?.CoreWebView2;
-        if (core is null) return;
-        var list = Bookmarks.Select(b => new { title = b.Title, url = b.Url }).ToList();
-        var json = JsonSerializer.Serialize(list);
-        var script = Injections.BookmarkOverlay.Replace("{0}", json);
-        try { await core.ExecuteScriptAsync(script); } catch { }
+        if (Bookmarks.Count == 0) return;
+        _bookmarkSel = 0;
+        BuildBookmarkRows();
+        await ShowOverlayBackdrop();
+        BookmarkListOverlay.Visibility = Visibility.Visible;
+        _ = Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () =>
+        {
+            BookmarkListOverlay.Focus();
+            Keyboard.Focus(BookmarkListOverlay);
+            if (_bookmarkRows.Count > 0) _bookmarkRows[0].BringIntoView();
+        });
+    }
+
+    void CloseBookmarkOverlay()
+    {
+        BookmarkListOverlay.Visibility = Visibility.Collapsed;
+        BookmarkListPanel.Children.Clear();
+        _bookmarkRows.Clear();
+        RestoreActiveViewAfterOverlay();
+    }
+
+    void BookmarkListOverlay_MouseDown(object sender, MouseButtonEventArgs e) => CloseBookmarkOverlay();
+
+    void BuildBookmarkRows()
+    {
+        BookmarkListPanel.Children.Clear();
+        _bookmarkRows.Clear();
+        _bookmarkSel = Math.Clamp(_bookmarkSel, 0, Math.Max(0, Bookmarks.Count - 1));
+        for (int i = 0; i < Bookmarks.Count; i++)
+        {
+            var bookmark = Bookmarks[i];
+            int idx = i;
+            var key = i < BookmarkKeys.Length ? BookmarkKeys[i].ToString() : "";
+            var row = new System.Windows.Controls.DockPanel();
+            var badge = new System.Windows.Controls.Border
+            {
+                BorderBrush = StarOnBrush,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(4),
+                Width = 22,
+                Height = 22,
+                Margin = new Thickness(0, 0, 10, 0),
+                Visibility = key.Length > 0 ? Visibility.Visible : Visibility.Hidden,
+                Child = new System.Windows.Controls.TextBlock
+                {
+                    Text = key,
+                    Foreground = StarOnBrush,
+                    FontFamily = new FontFamily("Consolas"),
+                    FontWeight = FontWeights.Bold,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center,
+                },
+            };
+            System.Windows.Controls.DockPanel.SetDock(badge, System.Windows.Controls.Dock.Left);
+            row.Children.Add(badge);
+            row.Children.Add(new System.Windows.Controls.TextBlock
+            {
+                Text = bookmark.Title,
+                ToolTip = bookmark.Url,
+                Foreground = new SolidColorBrush(Color.FromRgb(0xDD, 0xDD, 0xDD)),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            var wrap = new System.Windows.Controls.Border
+            {
+                Padding = new Thickness(8, 5, 8, 5),
+                CornerRadius = new CornerRadius(6),
+                Background = i == _bookmarkSel ? RowSelBrush : Brushes.Transparent,
+                Child = row,
+                Cursor = Cursors.Hand,
+            };
+            wrap.MouseEnter += (_, _) => SetBookmarkSel(idx);
+            wrap.MouseLeftButtonUp += (_, _) => OpenBookmark(bookmark, newTab: false);
+            _bookmarkRows.Add(wrap);
+            BookmarkListPanel.Children.Add(wrap);
+        }
+    }
+
+    void SetBookmarkSel(int i)
+    {
+        if (_bookmarkRows.Count == 0) return;
+        _bookmarkSel = (i + _bookmarkRows.Count) % _bookmarkRows.Count;
+        for (int r = 0; r < _bookmarkRows.Count; r++)
+            _bookmarkRows[r].Background = r == _bookmarkSel ? RowSelBrush : Brushes.Transparent;
+        _bookmarkRows[_bookmarkSel].BringIntoView();
+    }
+
+    void OpenBookmark(Bookmark bookmark, bool newTab)
+    {
+        CloseBookmarkOverlay();
+        if (newTab) _ = AddTabAsync(bookmark.Url);
+        else if (_active is not null) Navigate(_active, bookmark.Url);
+    }
+
+    void HandleBookmarkOverlayKey(Key key, bool shift, bool ctrl)
+    {
+        if (key == Key.Escape || (!ctrl && key == Key.B)) { CloseBookmarkOverlay(); return; }
+        if (ctrl) return;
+        if (key == Key.J || key == Key.Down) { SetBookmarkSel(_bookmarkSel + 1); return; }
+        if (key == Key.K || key == Key.Up) { SetBookmarkSel(_bookmarkSel - 1); return; }
+        if (key == Key.Enter)
+        {
+            if (_bookmarkSel < Bookmarks.Count) OpenBookmark(Bookmarks[_bookmarkSel], shift);
+            return;
+        }
+        char? c =
+            key >= Key.D0 && key <= Key.D9 ? (char)('0' + (key - Key.D0)) :
+            key >= Key.NumPad0 && key <= Key.NumPad9 ? (char)('0' + (key - Key.NumPad0)) :
+            key >= Key.A && key <= Key.Z ? (char)('a' + (key - Key.A)) : null;
+        if (c is null) return;
+        int idx = BookmarkKeys.IndexOf(c.Value);
+        if (idx >= 0 && idx < Bookmarks.Count) OpenBookmark(Bookmarks[idx], shift);
     }
 
     void BookmarkOpen_Click(object sender, RoutedEventArgs e)
@@ -375,9 +490,16 @@ public partial class MainWindow
     void OpenConfig_Click(object sender, RoutedEventArgs e)
     {
         MenuPopup.IsOpen = false;
-        try { Process.Start(new ProcessStartInfo("explorer.exe", Paths.AppDataDir) { UseShellExecute = true }); }
+        try
+        {
+            var psi = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            psi.ArgumentList.Add(Paths.AppDataDir);
+            Process.Start(psi);
+        }
         catch { }
     }
+
+    void RefreshNetworkUi() => NetworkMenuBtn.Content = NetworkRouting.StatusText(_settings);
 
     // ---- 外部プレーヤー連携 (mpv / Edge) ----
 
@@ -402,6 +524,13 @@ public partial class MainWindow
         var url = ActiveUrl();
         var core = tab?.View?.CoreWebView2;
         if (url.Length == 0 || core is null || tab is null) return;
+        if (NetworkRouting.IsProxyEnabled(_settings))
+        {
+            MessageBox.Show(this,
+                "Karu のプロキシ使用中は、外部 mpv の通信経路を保証できないため引き渡しを無効にしています。\n" +
+                "VPNなどシステム全体の経路を使う場合は ProxyServer を空にしてください。", "Karu");
+            return;
+        }
         if (Mpv.IsDrmSite(url))
         {
             MessageBox.Show(this,
@@ -491,7 +620,7 @@ public partial class MainWindow
         {
             var c = t.View?.CoreWebView2;
             if (c is null) continue;
-            try { await c.ExecuteScriptAsync($"window.__karuMaxQ = '{_settings.MaxQuality}'"); }
+            try { await c.ExecuteScriptAsync($"window.__karuMaxQ = {JsonSerializer.Serialize(_settings.MaxQuality)}"); }
             catch { }
         }
     }
@@ -507,7 +636,8 @@ public partial class MainWindow
         long total = 0;
         try
         {
-            var host = Process.GetCurrentProcess().WorkingSet64;
+            using var hostProcess = Process.GetCurrentProcess();
+            var host = hostProcess.WorkingSet64;
             total += host;
             sb.AppendLine($"ホスト(WPF): {host / 1048576.0,8:F1} MB");
             var env = await GetEnvAsync();
@@ -516,7 +646,7 @@ public partial class MainWindow
             {
                 try
                 {
-                    var p = Process.GetProcessById(pi.ProcessId);
+                    using var p = Process.GetProcessById(pi.ProcessId);
                     var kind = pi.Kind.ToString();
                     groups.TryGetValue(kind, out var g);
                     groups[kind] = (g.Count + 1, g.Bytes + p.WorkingSet64);
@@ -567,9 +697,18 @@ public partial class MainWindow
     {
         var url = ActiveUrl();
         if (url.Length == 0) return;
+        if (NetworkRouting.IsProxyEnabled(_settings))
+        {
+            MessageBox.Show(this,
+                "Karu のプロキシ設定は外部 Edge へ引き継げないため、この操作を無効にしています。\n" +
+                "直接接続によるIP漏えいを避けるためです。", "Karu");
+            return;
+        }
         try
         {
-            Process.Start(new ProcessStartInfo("msedge.exe", $"--app={url}") { UseShellExecute = true });
+            var psi = new ProcessStartInfo("msedge.exe") { UseShellExecute = true };
+            psi.ArgumentList.Add("--app=" + url);
+            Process.Start(psi);
         }
         catch (Exception ex)
         {
@@ -608,7 +747,12 @@ public partial class MainWindow
         if (string.IsNullOrEmpty(url) || url == "about:blank") return; // 中身の無いタブは分離しない
         var exe = Environment.ProcessPath;
         if (exe is null) return;
-        try { Process.Start(new ProcessStartInfo(exe, $"\"{url}\"") { UseShellExecute = true }); }
+        try
+        {
+            var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+            psi.ArgumentList.Add(url);
+            Process.Start(psi);
+        }
         catch { return; }
         CloseTab(tab); // 新ウィンドウを起動してから元タブを閉じる
     }
@@ -675,7 +819,7 @@ public partial class MainWindow
                 await core.ExecuteScriptAsync($"{Injections.TranslateApplyFn}({transJson},{col.Gen},{(final ? "true" : "false")})");
             }
             var throttle = Stopwatch.StartNew();
-            var (translations, _, _) = await Translator.TranslateAsync(col.Segs, "ja", onProgress: cur =>
+            var (translations, _, _) = await Translator.TranslateAsync(_translateHttp, col.Segs, "ja", onProgress: cur =>
             {
                 if (throttle.ElapsedMilliseconds < 350) return Task.CompletedTask; // 適用は DOM 全体の組み直しなので間引く
                 throttle.Restart();
