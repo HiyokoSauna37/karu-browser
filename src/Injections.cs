@@ -337,12 +337,22 @@ static class Injections
     /// 進捗同期を守るため本物のwatchページに留まり、制御はプレーヤー公式APIとCSS/JSの範囲で行う。
     /// 集中モードは document-start のCSSで初回描画前から隠しつつ(遅延ロードの発火自体を防ぐ)、
     /// DOM変化に強いようJS定期走査でも direct display:none を当てる二段構え。
+    ///
+    /// 広告スキップの前提(2026-10時点の base.js 解析とその裏取り):
+    ///   - スキップボタンの onClick は isTrusted=false のイベントを「広告ブロッカー」として記録したうえで
+    ///     スキップ処理を実行しない。ページ内JSの click()/dispatchEvent では越えられないため、見えている
+    ///     ボタンの座標だけをホストへ送り、ホストが CDP(Input.dispatchMouseEvent)で本物の入力を打つ
+    ///     (<see cref="YouTubeAdSkip"/>)。
+    ///   - サイズ0・opacity 0 のおとり .ytp-ad-skip-button が置かれ、押すと記録される。可視判定は必須。
+    ///   - 広告中の seeking は無条件に検知として報告される("a.s_")。末尾シークは即効だが記録は残るので、
+    ///     adSeek=false で止められる(その場合はミュートしてスキップボタンの出現を待つ)。
     /// </summary>
-    public static string YouTube(bool focusMode, string maxQuality) => $$"""
+    public static string YouTube(bool focusMode, string maxQuality, bool adSeek) => $$"""
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   window.__karuFocus = {{(focusMode ? "true" : "false")}};
   window.__karuMaxQ = {{System.Text.Json.JsonSerializer.Serialize(maxQuality)}};
+  const AD_SEEK = {{(adSeek ? "true" : "false")}};
 
   const HIDE = [
     '#secondary', '#related', 'ytd-watch-next-secondary-results-renderer',
@@ -355,8 +365,10 @@ static class Injections
   const addCss = () => {
     const css = document.createElement('style');
     css.textContent =
-      '#player-ads,#masthead-ad,ytd-display-ad-renderer,ytd-in-feed-ad-layout-renderer,' +
-      'ytd-ad-slot-renderer,ytd-companion-slot-renderer,.ytp-ad-overlay-container' +
+      // id系はアプリルート(ytd-app)配下に限定する。YouTubeは同名のclassを持つおとり要素をbody直下に
+      // 置き、非表示にされたら広告ブロッカーとして記録するため、無差別な #player-ads 等は踏まない
+      'ytd-app #player-ads,ytd-app #masthead-ad,ytd-display-ad-renderer,ytd-in-feed-ad-layout-renderer,' +
+      'ytd-ad-slot-renderer,ytd-companion-slot-renderer,.html5-video-player .ytp-ad-overlay-container' +
       '{display:none!important}';
     (document.head || document.documentElement).appendChild(css);
     // 集中モード用CSS。初回描画前から効かせてコメント/関連動画の遅延ロードを発火させない。
@@ -416,19 +428,81 @@ static class Injections
     bar.insertBefore(btn, bar.firstChild);
   };
 
+  // --- 広告スキップ ---
+  // 合成クリックは効かない: スキップボタンは isTrusted=false の click を広告ブロッカーとして記録したうえで
+  // スキップを実行しない。加えて不可視(サイズ0・opacity 0)のおとり .ytp-ad-skip-button があり、押すと
+  // それも記録される。そのためページ内では click() せず、「見えている」ボタンの中心座標だけをホストへ送り、
+  // ホストが CDP の Input.dispatchMouseEvent でユーザー操作と区別のつかないクリックを打つ。
+  // document-start時点の postMessage を閉包に捕獲する理由はVim層と同じ(ページ側のフック/すり替え対策)。
+  const send = (() => {
+    try {
+      const f = window.chrome.webview.postMessage.bind(window.chrome.webview);
+      return c => { try { f('{{MessageToken}}|' + c); } catch (e) {} };
+    } catch (e) { return () => {}; }
+  })();
+  // 部分一致で拾う: ytp-skip-ad-button(現行) / ytp-ad-skip-button(-modern, -container) / id=skip-button:N
+  const SKIP_SEL = '[class*="ytp-skip-ad-button"],[class*="ytp-ad-skip-button"],.ytp-skip-ad button,[id^="skip-button"]';
+  const visibleSkip = p => {
+    for (const el of p.querySelectorAll(SKIP_SEL)) {
+      const b = el.closest('button') || el;
+      if (b.disabled) continue;
+      const r = b.getBoundingClientRect();
+      if (r.width < 8 || r.height < 8) continue;
+      if (r.right <= 0 || r.bottom <= 0 || r.left >= innerWidth || r.top >= innerHeight) continue;
+      const st = getComputedStyle(b);
+      if (st.visibility === 'hidden' || st.pointerEvents === 'none' || parseFloat(st.opacity) < 0.5) continue;
+      // 中心点に本当にそのボタンがある(他要素に覆われていない)ことを確認してから渡す。
+      // ホスト側のクリックは本物なので、ずれて広告本体を押すと広告主サイトが開いてしまう
+      const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      const hit = document.elementFromPoint(cx, cy);
+      if (!hit || (hit !== b && !b.contains(hit))) continue;
+      return { x: Math.round(cx), y: Math.round(cy) };
+    }
+    return null;
+  };
+  // 広告1本ぶんの状態。contentDur は広告でない間の video.duration。広告中の duration がこれ以上なら
+  // タイムラインが本編と共有されている(サーバー側で縫い込まれた広告)ので、末尾へ飛ぶと本編ごと終わる
+  const ad = { on: false, muted: false, clicks: 0, lastClick: 0, contentDur: NaN };
+  const adTick = () => {
+    const p = document.querySelector('.html5-video-player');
+    const v = p && p.querySelector('video');
+    const showing = !!p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'));
+    if (!showing) {
+      if (ad.on) {
+        ad.on = false;
+        // 自分で掛けたミュートだけ戻す(広告前からのミュート/プレーヤー自身のミュートは触らない)。
+        // 終了直後の tick は media 切替中で duration が広告のままのことがあるので contentDur は更新しない
+        if (ad.muted && v && v.muted) {
+          const mp = document.getElementById('movie_player');
+          let pm = false; try { pm = !!(mp && mp.isMuted && mp.isMuted()); } catch (e) {}
+          if (!pm) v.muted = false;
+        }
+        ad.muted = false;
+        return;
+      }
+      if (v && isFinite(v.duration) && v.duration > 0) ad.contentDur = v.duration;
+      return;
+    }
+    if (!ad.on) { ad.on = true; ad.clicks = 0; ad.lastClick = 0; }
+    if (v) {
+      if (!v.muted) { v.muted = true; ad.muted = true; }
+      const d = v.duration;
+      const shared = isFinite(ad.contentDur) && d >= ad.contentDur - 1;
+      if (AD_SEEK && isFinite(d) && d > 0 && d < 1200 && !shared && v.currentTime < d - 0.3) v.currentTime = d;
+    }
+    // スキップボタンが見えたらホストに本物のクリックを頼む(1広告あたり最大8回・0.7秒間隔)
+    const s = visibleSkip(p);
+    const now = Date.now();
+    if (s && ad.clicks < 8 && now - ad.lastClick > 700) {
+      ad.clicks++; ad.lastClick = now;
+      send('adSkip|' + s.x + '|' + s.y);
+    }
+  };
+
   let hid = false; // 集中モードで実際に要素を隠しているか（無駄な復元走査を避ける）
   setInterval(() => {
     // --- 広告スキップ (バックグラウンド音声再生中も動かす) ---
-    const p = document.querySelector('.html5-video-player');
-    if (p && p.classList.contains('ad-showing')) {
-      const v = p.querySelector('video');
-      if (v && isFinite(v.duration) && v.duration > 0) {
-        v.muted = true;
-        v.currentTime = v.duration;
-      }
-      const skip = p.querySelector('.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern');
-      if (skip) skip.click();
-    }
+    adTick();
     // --- ここから表示中タブのみ (非表示タブではDOM走査を止めてCPUを節約) ---
     if (document.hidden) return;
     capQuality();

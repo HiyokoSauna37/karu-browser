@@ -52,6 +52,30 @@ Check(TwitchAds.IsMediaPlaylist("https://video-weaver.tyo01.playlist.ttvnw.net/v
 Check(!TwitchAds.IsMediaPlaylist("https://evil.example/v1/playlist/test.m3u8?x=.playlist.ttvnw.net"),
     "lookalike media playlist rejected");
 
+Check(YouTubeAdSkip.TryParseCommand("adSkip|640|360", out var adX, out var adY) && adX == 640 && adY == 360,
+    "ad skip command parsed");
+Check(!YouTubeAdSkip.TryParseCommand("adSkip|-1|360", out _, out _), "negative ad skip coordinate rejected");
+Check(!YouTubeAdSkip.TryParseCommand("adSkip|12.5|360", out _, out _), "fractional ad skip coordinate rejected");
+Check(!YouTubeAdSkip.TryParseCommand("adSkip|99999|360", out _, out _), "out-of-range ad skip coordinate rejected");
+Check(!YouTubeAdSkip.TryParseCommand("adSkip|1|2|3", out _, out _), "malformed ad skip command rejected");
+Check(!YouTubeAdSkip.TryParseCommand("tabClose", out _, out _), "non ad skip command rejected");
+Check(YouTubeAdSkip.IsYouTubeHost("www.youtube.com") && YouTubeAdSkip.IsYouTubeHost("youtube.com"), "YouTube host accepted");
+Check(!YouTubeAdSkip.IsYouTubeHost("youtube.com.evil.example") && !YouTubeAdSkip.IsYouTubeHost("notyoutube.com"),
+    "lookalike YouTube host rejected");
+var clickSeq = YouTubeAdSkip.ClickSequence(10, 20).ToList();
+Check(clickSeq.Count == 2 && clickSeq[0].Contains("mousePressed") && clickSeq[1].Contains("mouseReleased"),
+    "trusted click is press then release (no mouseMoved: it never completes on a hidden WebView)");
+Check(clickSeq.All(j => j.Contains("\"button\":\"left\"") && j.Contains("\"clickCount\":1")
+    && j.Contains("\"x\":10") && j.Contains("\"y\":20")), "trusted click is a left single click at the point");
+var ytScript = Injections.YouTube(false, "", true);
+Check(ytScript.Contains(Injections.MessageToken, StringComparison.Ordinal), "YouTube script carries the message token");
+Check(ytScript.Contains("adSkip|", StringComparison.Ordinal), "YouTube script asks the host for the skip click");
+Check(!ytScript.Contains(".click()", StringComparison.Ordinal), "YouTube script never clicks ad controls synthetically");
+Check(Injections.YouTube(false, "", false).Contains("const AD_SEEK = false", StringComparison.Ordinal), "ad seek can be disabled");
+var adDefaults = new AppSettings();
+adDefaults.Normalize();
+Check(adDefaults.YouTubeAdSeek, "ad seek on by default");
+
 var invalidSettings = new AppSettings
 {
     MaxFps = -1,

@@ -268,7 +268,7 @@ public partial class MainWindow : Window
             scripts.Add(Injections.TwitchQuality);
         if (_settings.TwitchAdBlock)
             scripts.Add(Injections.TwitchAdCover);
-        scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality));
+        scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality, _settings.YouTubeAdSeek));
         scripts.Add(Injections.Vim);
         scripts.Add(Injections.PageCover);
         await core.AddScriptToExecuteOnDocumentCreatedAsync(string.Join("\n;\n", scripts));
@@ -431,6 +431,8 @@ public partial class MainWindow : Window
         // これが無いと任意のページのJSがタブ操作コマンドを偽装できてしまう。
         if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
         var cmd = raw[(Injections.MessageToken.Length + 1)..];
+        // YouTube広告スキップ: 座標付きコマンドなので switch の前で処理する
+        if (cmd.StartsWith(YouTubeAdSkip.Command + "|", StringComparison.Ordinal)) { _ = TrustedAdSkipClickAsync(tab, cmd); return; }
         switch (cmd)
         {
             case "tabClose": CloseTab(tab); break;

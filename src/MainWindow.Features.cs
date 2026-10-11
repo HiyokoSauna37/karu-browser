@@ -693,6 +693,39 @@ public partial class MainWindow
         try { await core.CallDevToolsProtocolMethodAsync("Runtime.evaluate", payload); } catch { }
     }
 
+    /// <summary>
+    /// YouTube注入スクリプトからの依頼で、広告スキップボタンの座標に本物のクリックを打つ。
+    /// YouTubeのスキップボタンは isTrusted=false の合成クリックを広告ブロッカーとして記録したうえで無視する
+    /// ため、ページ内JSでは押せない。ブラウザ側から CDP の Input.dispatchMouseEvent で入力を注入すると、
+    /// ユーザー操作と区別のつかないイベントになる。座標はCSSピクセル(ビューポート基準)で、
+    /// getBoundingClientRect の値がそのまま使える(DPIスケール換算は不要)。
+    /// 可視判定とおとり回避はスクリプト側(<see cref="Injections.YouTube"/>)、ここは最後の砦として
+    /// 「YouTube上のタブ」「整数座標」「連打抑止」だけを確認する。
+    /// </summary>
+    async Task TrustedAdSkipClickAsync(BrowserTab tab, string cmd)
+    {
+        var core = tab.View?.CoreWebView2;
+        if (core is null) return;
+        if (!YouTubeAdSkip.TryParseCommand(cmd, out var x, out var y)) return;
+        // 注入スクリプトはYouTube以外では送らないが、別サイトへ本物のクリックを打たないようホスト名でも縛る
+        if (!Uri.TryCreate(core.Source, UriKind.Absolute, out var uri) || !YouTubeAdSkip.IsYouTubeHost(uri.Host)) return;
+        var now = DateTime.UtcNow;
+        if (now - tab.LastAdSkipClick < TimeSpan.FromMilliseconds(300)) return;
+        tab.LastAdSkipClick = now;
+        try
+        {
+            foreach (var json in YouTubeAdSkip.ClickSequence(x, y))
+            {
+                // 非表示WebView(背景タブ)では呼び出しの一つが完了しないことがあるが、入力自体は届く
+                // (実測: 押下か解放のどちらかが返らなくてもクリックは発火する)。完了を待ちすぎず、
+                // 返らなくても次(解放)を送る。待ち続けるとこのタブの以後のスキップが詰まる
+                var call = core.CallDevToolsProtocolMethodAsync("Input.dispatchMouseEvent", json);
+                await Task.WhenAny(call, Task.Delay(1000));
+            }
+        }
+        catch { }
+    }
+
     void OpenInEdge()
     {
         var url = ActiveUrl();

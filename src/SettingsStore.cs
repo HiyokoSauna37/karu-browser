@@ -17,6 +17,10 @@ public class AppSettings
     /// <summary>Twitchのサーバー側挿入広告(SSAI)を、プレイリストを取り直して差し替えることで回避する。
     /// 消せなかった広告は消音+被いに切り替える。反映は再読み込み後 (TwitchAds.cs)</summary>
     public bool TwitchAdBlock { get; set; } = true;
+    /// <summary>YouTube広告でスキップボタンが無い間、広告動画を末尾へ飛ばす。即効だが広告中のシークは
+    /// YouTube側に逐一報告されるため、警告が出るようになったら false にする(ミュートしてスキップボタンを待つ動作になる)。
+    /// スキップボタン自体はこの設定に関係なく、CDP経由の本物のクリックで押す。反映は再読み込み後</summary>
+    public bool YouTubeAdSeek { get; set; } = true;
 
     // ---- ネットワーク / 検閲回避 (変更後は再起動) ----
     /// <summary>HTTP(S) または SOCKS5 proxy。例: socks5://127.0.0.1:9050。空ならシステム設定。</summary>

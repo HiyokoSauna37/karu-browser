@@ -31,6 +31,9 @@ public class BrowserTab : INotifyPropertyChanged
     public string? MpvReturnUrl;
     public double MpvReturnPos;
 
+    /// <summary>直近にYouTube広告スキップの本物クリックを打った時刻(連打抑止)。</summary>
+    public DateTime LastAdSkipClick = DateTime.MinValue;
+
     /// <summary>休眠中かどうか。タブUIの表示(半透明化)にもバインドされる。</summary>
     public bool IsAsleep => View is null;
 
