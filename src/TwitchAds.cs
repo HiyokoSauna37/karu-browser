@@ -55,7 +55,7 @@ sealed class TwitchAds : IDisposable
     /// <summary>差し替え済みの対応表。プレイヤーが要求するURL → 実際に読みに行くURL。</summary>
     readonly ConcurrentDictionary<string, string> _swapped = new();
 
-    readonly record struct Variant(string Usher, string Name, int Index);
+    internal readonly record struct Variant(string Usher, string Name, int Index);
 
     public static bool IsUsher(string uri)
         => IsTrustedUri(uri, "usher.ttvnw.net", "/api/");
@@ -134,13 +134,12 @@ sealed class TwitchAds : IDisposable
         return (body, true);
     }
 
-    /// <summary>マスタープレイリストを解析して URL→(usher, 画質名, 並び順) を覚える。</summary>
-    void Remember(string usher, string master)
+    /// <summary>マスタープレイリストの画質行を (画質名, URL) の並び順で列挙する。
+    /// 画質名は直前の #EXT-X-STREAM-INF から取り、無ければ空。</summary>
+    internal static IEnumerable<(string Name, string Url)> Variants(string master)
     {
-        if (_origin.Count > MaxTracked) _origin.Clear();
         string name = "";
-        int index = 0;
-        foreach (var raw in master.Split((char)10))
+        foreach (var raw in master.Split('\n'))
         {
             var line = raw.Trim();
             if (line.StartsWith("#EXT-X-STREAM-INF", StringComparison.Ordinal))
@@ -150,10 +149,19 @@ sealed class TwitchAds : IDisposable
             }
             else if (line.StartsWith("http", StringComparison.Ordinal))
             {
-                _origin[line] = new Variant(usher, name, index++);
+                yield return (name, line);
                 name = "";
             }
         }
+    }
+
+    /// <summary>マスタープレイリストを解析して URL→(usher, 画質名, 並び順) を覚える。</summary>
+    void Remember(string usher, string master)
+    {
+        if (_origin.Count > MaxTracked) _origin.Clear();
+        int index = 0;
+        foreach (var (name, url) in Variants(master))
+            _origin[url] = new Variant(usher, name, index++);
     }
 
     /// <summary>
@@ -161,24 +169,9 @@ sealed class TwitchAds : IDisposable
     /// 同じ usher URL を叩き直しているので並び順は安定している。名前が一致しなければ
     /// 同じ並び順、それも無ければ先頭にフォールバックする。
     /// </summary>
-    static string? Pick(string master, Variant want)
+    internal static string? Pick(string master, Variant want)
     {
-        var urls = new List<(string Name, string Url)>();
-        string name = "";
-        foreach (var raw in master.Split((char)10))
-        {
-            var line = raw.Trim();
-            if (line.StartsWith("#EXT-X-STREAM-INF", StringComparison.Ordinal))
-            {
-                var m = NameRe.Match(line);
-                name = m.Success ? m.Groups[1].Value : "";
-            }
-            else if (line.StartsWith("http", StringComparison.Ordinal))
-            {
-                urls.Add((name, line));
-                name = "";
-            }
-        }
+        var urls = Variants(master).ToList();
         if (urls.Count == 0) return null;
         if (want.Name.Length > 0)
             foreach (var u in urls)

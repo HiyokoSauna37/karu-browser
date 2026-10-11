@@ -60,12 +60,7 @@ static class Mpv
         foreach (var exe in new[] { "mpv.exe", Path.Combine(links, "mpv.exe"), FindWinGetExe("mpv.exe"), "mpvnet.exe" })
         {
             if (exe is null) continue;
-            try
-            {
-                var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
-                foreach (var arg in args) psi.ArgumentList.Add(arg);
-                return Process.Start(psi);
-            }
+            try { return ExternalProcess.Start(exe, args); }
             catch { }
         }
         return null;

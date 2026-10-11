@@ -296,8 +296,7 @@ public partial class MainWindow
     {
         int idx = Tabs.IndexOf(tab);
         if (idx < 0) return;
-        var url = TabUrl(tab);
-        if (!string.IsNullOrEmpty(url) && url != "about:blank")
+        if (ContentUrl(tab) is { } url)
         {
             _closedUrls.Add(url);
             if (_closedUrls.Count > 20) _closedUrls.RemoveAt(0); // 復元用の履歴は直近20件で十分
@@ -360,11 +359,28 @@ public partial class MainWindow
     void ShowStartPage(BrowserTab tab)
         => tab.View?.CoreWebView2?.NavigateToString(StartPage.Generate(Bookmarks));
 
-    string ActiveUrl()
+    /// <summary>開いている全タブのページで同じスクリプトを実行する(休眠タブは対象外)。設定変更の即時反映用。
+    /// 実行中にタブが増減してもよいようスナップショットを回す。</summary>
+    async Task BroadcastScriptAsync(string js)
     {
-        var s = _active is null ? "" : TabUrl(_active) ?? "";
-        return s == "about:blank" ? "" : s;
+        foreach (var t in Tabs.ToList())
+        {
+            var c = t.View?.CoreWebView2;
+            if (c is null) continue;
+            try { await c.ExecuteScriptAsync(js); } catch { }
+        }
     }
+
+    enum TabState { Hibernated, Suspended, Active, Idle }
+
+    /// <summary>タブのライフサイクル上の現在地(タブ一覧とメモリ表示の表記に使う)。</summary>
+    TabState StateOf(BrowserTab t) =>
+        t.View is null ? TabState.Hibernated
+        : t.View.CoreWebView2?.IsSuspended == true ? TabState.Suspended
+        : t == _active ? TabState.Active
+        : TabState.Idle;
+
+    string ActiveUrl() => _active is null ? "" : ContentUrl(_active) ?? "";
 
     /// <summary>タブバーが無いため、ウィンドウタイトルに [位置/総数] を出して現在地を示す。</summary>
     void UpdateWindowTitle()

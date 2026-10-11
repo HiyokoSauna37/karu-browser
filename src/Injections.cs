@@ -11,6 +11,9 @@ static class Injections
     /// </summary>
     public static readonly string MessageToken = Guid.NewGuid().ToString("N");
 
+    /// <summary>C# の bool を JS リテラルにする(テンプレートの穴とホストからの呼び出し引数の両方で使う)。</summary>
+    public static string JsBool(bool value) => value ? "true" : "false";
+
     /// <summary>
     /// ページ内読み込みカバー。ナビゲーション直後の「描画済みに見えるが操作できない」期間、
     /// ページ全面を炎アニメーション付きの被いで覆う。ホストとの通信は不要(完全にページ内で完結)。
@@ -350,9 +353,9 @@ static class Injections
     public static string YouTube(bool focusMode, string maxQuality, bool adSeek) => $$"""
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
-  window.__karuFocus = {{(focusMode ? "true" : "false")}};
+  window.__karuFocus = {{JsBool(focusMode)}};
   window.__karuMaxQ = {{System.Text.Json.JsonSerializer.Serialize(maxQuality)}};
-  const AD_SEEK = {{(adSeek ? "true" : "false")}};
+  const AD_SEEK = {{JsBool(adSeek)}};
 
   const HIDE = [
     '#secondary', '#related', 'ytd-watch-next-secondary-results-renderer',
@@ -557,7 +560,7 @@ static class Injections
     public static string MediaPolicy(bool forceH264, int maxFps) => $$"""
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
-  const blockCodec = {{(forceH264 ? "true" : "false")}};
+  const blockCodec = {{JsBool(forceH264)}};
   const maxFps = {{maxFps}};
   const badCodec = t => blockCodec && typeof t === 'string' && /vp0?8|vp0?9|av01/i.test(t);
   const badFps = t => {
@@ -668,7 +671,7 @@ static class Injections
     /// 重複するが、動画を見ていないとき(検索結果・チャンネルページ等)もKaruの操作性を優先するため、
     /// YouTube上でも常にKaru側が優先する(意図的な選択。無効化はしない)。
     /// </summary>
-    public static string Vim => VimSrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
+    public static readonly string Vim = VimSrc.Replace("__KARU_MSG_TOKEN__", MessageToken);
 
     const string VimSrc = """
 (() => {

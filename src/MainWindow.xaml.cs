@@ -1,11 +1,9 @@
 using System.Collections.ObjectModel;
-using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Windows;
 using System.Windows.Input;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shell;
 using System.Windows.Threading;
@@ -15,7 +13,8 @@ using Microsoft.Web.WebView2.Wpf;
 namespace Karu;
 
 /// <summary>本体。ライフサイクル・WebView2環境・タブ生成・ウィンドウ操作を担当。
-/// タブ切替/休眠は MainWindow.Tabs.cs、機能系(mpv/お気に入り/集中モード)は MainWindow.Features.cs。</summary>
+/// タブ切替/休眠は MainWindow.Tabs.cs、オーバーレイ(URL入力/タブ一覧/お気に入り)は MainWindow.Overlays.cs、
+/// 機能系(mpv/翻訳/集中モード/メニュー)は MainWindow.Features.cs。</summary>
 public partial class MainWindow : Window
 {
     public ObservableCollection<BrowserTab> Tabs { get; } = new();
@@ -36,9 +35,6 @@ public partial class MainWindow : Window
     bool _fsFromElement; // 現在の全画面がHTML要素由来か (F11手動と区別し、タブ切替時の自動解除判定に使う)
     WindowState _preFsState = WindowState.Normal;
     DateTime _minimizedAt = DateTime.Now;
-
-    static readonly Brush StarOffBrush = new SolidColorBrush(Color.FromRgb(0x77, 0x77, 0x77));
-    static readonly Brush StarOnBrush = new SolidColorBrush(Color.FromRgb(0xD4, 0x84, 0x5E));
 
     // ナビゲーション中の炎アニメーション (2フレームを交互表示。クリック直後に「もう始まっている」を伝える)
     static readonly BitmapImage FlameFrame1 = new(new Uri("pack://application:,,,/karu-flame1.png"));
@@ -162,7 +158,7 @@ public partial class MainWindow : Window
     /// 分離ウィンドウは自分のタブで上書きせず合流させる(最後に閉じた窓が他の窓のタブを消さないように)。</summary>
     public void SaveSessionNow()
     {
-        var urls = Tabs.Select(t => TabUrl(t) ?? "").Where(u => u.Length > 0 && u != "about:blank");
+        var urls = ContentUrls();
         if (((App)Application.Current).IsDetachedWindow) SessionStore.Append(urls);
         else SessionStore.Save(urls);
     }
@@ -180,6 +176,29 @@ public partial class MainWindow : Window
         // これが無いと、落ちたブラウザのタブは「空タブ」として捨てられ、終了時にセッションごと消える
         if (string.IsNullOrEmpty(url) || url == "about:blank") return t.LastUrl ?? url;
         return url;
+    }
+
+    /// <summary>保存・復元・分離の対象になる実URL。空タブ(about:blank)や取得不能なら null。</summary>
+    static string? ContentUrl(BrowserTab t)
+    {
+        var url = TabUrl(t);
+        return string.IsNullOrEmpty(url) || url == "about:blank" ? null : url;
+    }
+
+    /// <summary>全タブの実URL(タブ順)。セッション保存と再起動の引き継ぎに使う。</summary>
+    IEnumerable<string> ContentUrls() => Tabs.Select(ContentUrl).OfType<string>();
+
+    /// <summary>ストリームから即時デコードして凍結した画像を作る(favicon とオーバーレイ背景で共用)。</summary>
+    static BitmapImage DecodeBitmap(Stream stream, int decodePixelWidth = 0)
+    {
+        var img = new BitmapImage();
+        img.BeginInit();
+        img.CacheOption = BitmapCacheOption.OnLoad;
+        if (decodePixelWidth > 0) img.DecodePixelWidth = decodePixelWidth;
+        img.StreamSource = stream;
+        img.EndInit();
+        img.Freeze();
+        return img;
     }
 
     /// <summary>結果を待たないスクリプト実行。破棄済み/消失後の WebView では例外になるが、その Task を観測しないと
@@ -285,17 +304,31 @@ public partial class MainWindow : Window
         var core = view.CoreWebView2;
         if (core is null) return null;
 
-        core.Settings.IsPasswordAutosaveEnabled = true;
-        core.Settings.IsGeneralAutofillEnabled = true;
-        core.Settings.IsStatusBarEnabled = false;
-        core.Settings.IsWebMessageEnabled = true; // Vim層のタブ操作コマンド受信に必要
-        core.Settings.AreHostObjectsAllowed = false;
-        core.Settings.IsSwipeNavigationEnabled = false;
-        core.Settings.AreDevToolsEnabled = false;  // F12無効 (CDP経由のCtrl+Oは影響なし)
-        core.Settings.IsPinchZoomEnabled = false;
+        ApplyCoreSettings(core.Settings);
         await LoadExtensionsAsync(core.Profile);
         // document-start注入は1本に結合して一度で登録する (タブ生成・休眠復帰のたびに走るIPCなので
         // 5往復→1往復にして初動を軽くする。各断片は自己完結のIIFEで、";"区切りなら安全に連結できる)
+        await core.AddScriptToExecuteOnDocumentCreatedAsync(string.Join("\n;\n", StartupScripts()));
+        WireTabEvents(tab, core);
+        HookResourceFiltering(core);
+        return core;
+    }
+
+    static void ApplyCoreSettings(CoreWebView2Settings settings)
+    {
+        settings.IsPasswordAutosaveEnabled = true;
+        settings.IsGeneralAutofillEnabled = true;
+        settings.IsStatusBarEnabled = false;
+        settings.IsWebMessageEnabled = true; // Vim層のタブ操作コマンド受信に必要
+        settings.AreHostObjectsAllowed = false;
+        settings.IsSwipeNavigationEnabled = false;
+        settings.AreDevToolsEnabled = false;  // F12無効 (CDP経由のCtrl+Oは影響なし)
+        settings.IsPinchZoomEnabled = false;
+    }
+
+    /// <summary>document-start で全ページに注入するスクリプト群(設定で有無が変わるものを含む)。</summary>
+    List<string> StartupScripts()
+    {
         var scripts = new List<string> { Injections.LowSpec };
         if (_settings.ForceH264 || _settings.MaxFps > 0)
             scripts.Add(Injections.MediaPolicy(_settings.ForceH264, _settings.MaxFps));
@@ -306,8 +339,12 @@ public partial class MainWindow : Window
         scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality, _settings.YouTubeAdSeek));
         scripts.Add(Injections.Vim);
         scripts.Add(Injections.PageCover);
-        await core.AddScriptToExecuteOnDocumentCreatedAsync(string.Join("\n;\n", scripts));
+        return scripts;
+    }
 
+    /// <summary>タブの表示状態(タイトル/favicon/読み込み中/全画面)とページからのコマンドをホストへ配線する。</summary>
+    void WireTabEvents(BrowserTab tab, CoreWebView2 core)
+    {
         core.DocumentTitleChanged += (_, _) =>
         {
             tab.Title = string.IsNullOrWhiteSpace(core.DocumentTitle) ? "新しいタブ" : core.DocumentTitle;
@@ -323,13 +360,7 @@ public partial class MainWindow : Window
                 await src.CopyToAsync(ms);
                 if (ms.Length == 0) { tab.Favicon = null; return; }
                 ms.Position = 0;
-                var img = new BitmapImage();
-                img.BeginInit();
-                img.CacheOption = BitmapCacheOption.OnLoad;
-                img.StreamSource = ms;
-                img.EndInit();
-                img.Freeze();
-                tab.Favicon = img;
+                tab.Favicon = DecodeBitmap(ms);
             }
             catch { tab.Favicon = null; }
         };
@@ -388,7 +419,11 @@ public partial class MainWindow : Window
             _fsFromElement = core.ContainsFullScreenElement;
             SetFullscreen(core.ContainsFullScreenElement);
         };
+    }
 
+    /// <summary>リクエスト単位の遮断・差し替え(先読み/広告/Twitch広告)と Save-Data ヘッダ。</summary>
+    void HookResourceFiltering(CoreWebView2 core)
+    {
         // 「表示しないデータを受信しない」レイヤー:
         //   - Sec-Purpose/Purpose: prefetch が付いた投機的リクエストを遮断 (Prerender2無効化の取りこぼし対策)
         //   - Save-Data: on を送り、対応サイトには軽量版レスポンスを要求
@@ -436,8 +471,6 @@ public partial class MainWindow : Window
             foreach (var pattern in new[] { "*usher.ttvnw.net/api/*", "*.playlist.ttvnw.net/v1/playlist/*" })
                 core.AddWebResourceRequestedFilter(pattern, CoreWebView2WebResourceContext.All,
                     CoreWebView2WebResourceRequestSourceKinds.All);
-
-        return core;
     }
 
     /// <summary>
@@ -464,7 +497,7 @@ public partial class MainWindow : Window
                 blocked = r?.Blocked ?? false;
             }
             // 差し替えられなかった広告はページ側で消音+被いに回す
-            FireScript(core, $"window.__karuTwitchAd&&window.__karuTwitchAd({(blocked ? "true" : "false")})");
+            FireScript(core, $"window.__karuTwitchAd&&window.__karuTwitchAd({Injections.JsBool(blocked)})");
             if (body is null) return;
 
             var bytes = new MemoryStream(Encoding.UTF8.GetBytes(body));
@@ -476,7 +509,7 @@ public partial class MainWindow : Window
         finally { deferral.Complete(); }
     }
 
-    /// <summary>注入スクリプト(Vim層・ブックマークオーバーレイ)からのタブ操作コマンドを処理する。</summary>
+    /// <summary>注入スクリプト(Vim層・YouTube広告スキップ・mpvプレースホルダー)からのコマンドを処理する。</summary>
     void OnWebMessage(BrowserTab tab, CoreWebView2WebMessageReceivedEventArgs args)
     {
         string? raw = null;
@@ -553,12 +586,9 @@ public partial class MainWindow : Window
     {
         var exe = Environment.ProcessPath;
         if (exe is null) return;
-        var urls = Tabs.Select(t => TabUrl(t) ?? "")
-                       .Where(u => u.Length > 0 && u != "about:blank");
-        var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
-        if (((App)Application.Current).IsDetachedWindow) psi.ArgumentList.Add(App.DetachedFlag);
-        foreach (var url in urls) psi.ArgumentList.Add(url);
-        Process.Start(psi);
+        var args = ContentUrls();
+        if (((App)Application.Current).IsDetachedWindow) args = args.Prepend(App.DetachedFlag);
+        ExternalProcess.Start(exe, args);
         Close();
     }
 

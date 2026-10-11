@@ -5,6 +5,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Karu.Tests</AssemblyName>
+    <!-- KeyedList のキー対応表が WPF の Key 列挙を取るため -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\src\Karu.csproj" />

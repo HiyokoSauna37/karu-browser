@@ -89,6 +89,28 @@ Check(!NetworkRouting.IsProxyEnabled(badProxy) && NetworkRouting.HasInvalidProxy
 Check(NetworkRouting.StatusText(badProxy).Contains("不正", StringComparison.Ordinal), "menu shows the invalid proxy state");
 Check(!NetworkRouting.HasInvalidProxy(new AppSettings()), "empty proxy is not an error");
 
+// Twitch master playlists name the rendition differently per usher version (VIDEO= / STABLE-VARIANT-ID=)
+const string master = "#EXTM3U\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=1,VIDEO=\"chunked\"\nhttps://a/chunked.m3u8\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=2,STABLE-VARIANT-ID=\"720p60\"\nhttps://a/720.m3u8\n" +
+    "#EXT-X-STREAM-INF:BANDWIDTH=3\nhttps://a/noname.m3u8\n";
+var variants = TwitchAds.Variants(master).ToList();
+Check(variants.Count == 3, "three variants parsed");
+Equal("chunked", variants[0].Name, "v1 VIDEO attribute read as the name");
+Equal("720p60", variants[1].Name, "v2 STABLE-VARIANT-ID read as the name");
+Equal("", variants[2].Name, "variant without a name attribute");
+Equal("https://a/720.m3u8", TwitchAds.Pick(master, new TwitchAds.Variant("u", "720p60", 0)), "pick by name beats position");
+Equal("https://a/noname.m3u8", TwitchAds.Pick(master, new TwitchAds.Variant("u", "1080p60", 2)), "unknown name falls back to position");
+Equal("https://a/chunked.m3u8", TwitchAds.Pick(master, new TwitchAds.Variant("u", "", 9)), "position past the end falls back to first");
+Check(TwitchAds.Pick("#EXTM3U\n", new TwitchAds.Variant("u", "", 0)) is null, "master without renditions yields nothing");
+
+// Keyed list overlays: which row a key press selects
+Check(KeyedList.KeyToChar(System.Windows.Input.Key.D3) == '3' && KeyedList.KeyToChar(System.Windows.Input.Key.NumPad3) == '3',
+    "digit and numpad keys map to the same character");
+Check(KeyedList.KeyToChar(System.Windows.Input.Key.Q) == 'q', "letter keys map to lowercase");
+Check(KeyedList.KeyToChar(System.Windows.Input.Key.Enter) is null && KeyedList.KeyToChar(System.Windows.Input.Key.F1) is null,
+    "non-character keys map to nothing");
+
 var invalidSettings = new AppSettings
 {
     MaxFps = -1,
