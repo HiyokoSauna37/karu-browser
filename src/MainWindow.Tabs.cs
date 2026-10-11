@@ -232,15 +232,11 @@ public partial class MainWindow
     {
         var view = tab.View;
         if (view is null || (tab == _active && !allowActive)) return;
-        string? url = null;
-        try { url = view.CoreWebView2?.Source; } catch { }
+        // TabUrl は mpvプレースホルダー中の元動画URL、ブラウザ消失後の最後に見たURLまで面倒を見る
+        var url = TabUrl(tab);
         if (url == "about:blank") url = null;
-        // mpvプレースホルダー(NavigateToString)中なら、復帰先として元動画のURL/位置を引き継ぐ
-        if (url is null && tab.MpvReturnUrl is not null)
-        {
-            url = tab.MpvReturnUrl;
-            tab.LastVideoPos = tab.MpvReturnPos;
-        }
+        // mpv再生中なら復帰先の再生位置も元動画のものにする
+        if (url is not null && url == tab.MpvReturnUrl) tab.LastVideoPos = tab.MpvReturnPos;
         WebHost.Children.Remove(view);
         try { view.Dispose(); } catch { }
         tab.Detach(url, tab.LastVideoPos);
@@ -258,6 +254,28 @@ public partial class MainWindow
         try { core.Navigate(url); } catch { }
     }
 
+    bool _recoveringBrowser;
+
+    /// <summary>ブラウザプロセス(全タブ共通)が消えた後の復旧。死んだ WebView は Source が about:blank に化け、以後の
+    /// メンバーアクセスは例外になる(実測)。全タブを休眠(URLは <see cref="BrowserTab.LastUrl"/> から保持)にして
+    /// 表示中のタブだけ起こす。環境(CoreWebView2Environment)はそのまま使え、新しいブラウザプロセスが立つ。
+    /// イベントハンドラの中で WebView を破棄しないよう、ディスパッチャへ一度逃がす。</summary>
+    void RecoverFromBrowserProcessExit()
+    {
+        if (_recoveringBrowser) return;
+        _recoveringBrowser = true;
+        _ = Dispatcher.InvokeAsync(async () =>
+        {
+            try
+            {
+                foreach (var t in Tabs.ToList()) HibernateTab(t, allowActive: true);
+                if (_active is not null) await WakeTabAsync(_active);
+            }
+            catch { }
+            finally { _recoveringBrowser = false; }
+        }, System.Windows.Threading.DispatcherPriority.Background);
+    }
+
     /// <summary>復帰後の最初のナビゲーション完了時に、記録していた再生位置へシークする。</summary>
     static void HookResumeSeek(CoreWebView2 core, double pos)
     {
@@ -265,7 +283,7 @@ public partial class MainWindow
         void Handler(object? s, CoreWebView2NavigationCompletedEventArgs e)
         {
             core.NavigationCompleted -= Handler;
-            _ = core.ExecuteScriptAsync(
+            FireScript(core,
                 "(function(){var t=" + posStr + ",n=0,id=setInterval(function(){" +
                 "var v=document.querySelector('video');" +
                 "if(v&&v.readyState>0){v.currentTime=t;clearInterval(id);return;}" +

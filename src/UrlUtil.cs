@@ -19,7 +19,12 @@ static class UrlUtil
                 !string.IsNullOrEmpty(absolute.Host))
                 return absolute.AbsoluteUri;
             if (absolute.Scheme == Uri.UriSchemeFile) return absolute.AbsoluteUri;
+            if (absolute.Scheme == Uri.UriSchemeMailto) return absolute.AbsoluteUri; // 既定のメールクライアントに渡る
             if (input.Equals("about:blank", StringComparison.OrdinalIgnoreCase)) return "about:blank";
+            // "scheme://" を明示して通さないもの(ftp:, chrome:, edge: 等)は、https:// を前置して
+            // "https://ftp://host" のような壊れたURLにせず検索へ落とす
+            if (input.Contains("://", StringComparison.Ordinal))
+                return "https://www.google.com/search?q=" + Uri.EscapeDataString(input);
         }
         if (!input.Contains(' '))
         {

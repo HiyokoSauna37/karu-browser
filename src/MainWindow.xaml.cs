@@ -120,6 +120,11 @@ public partial class MainWindow : Window
     {
         _bookmarks.Load();
         _adblock.Load();
+        if (NetworkRouting.HasInvalidProxy(_settings))
+            MessageBox.Show(this,
+                "settings.json の ProxyServer の書式が不正です。プロキシなし(直接接続)で動作しています。\n" +
+                "http://host:port、https://host:port、socks5://host:port のいずれかで指定してください(認証情報の埋め込みは不可)。",
+                "Karu", MessageBoxButton.OK, MessageBoxImage.Warning);
         var urls = ((App)Application.Current).LaunchUrls;
         if (urls.Length == 0) urls = SessionStore.Load();
         // 壊れた/手編集されたセッションで無制限にタブを生成しない。
@@ -147,12 +152,19 @@ public partial class MainWindow : Window
     {
         _sleepTimer.Stop();
         _flameTimer.Stop();
-        SessionStore.Save(Tabs
-            .Select(t => TabUrl(t) ?? "")
-            .Where(u => u.Length > 0 && u != "about:blank"));
+        SaveSessionNow();
         foreach (var t in Tabs) t.View?.Dispose();
         _twitchAds.Dispose();
         _translateHttp.Dispose();
+    }
+
+    /// <summary>開いているタブをセッションファイルへ書く。通常終了のほか、未処理例外の直後にも呼ばれる。
+    /// 分離ウィンドウは自分のタブで上書きせず合流させる(最後に閉じた窓が他の窓のタブを消さないように)。</summary>
+    public void SaveSessionNow()
+    {
+        var urls = Tabs.Select(t => TabUrl(t) ?? "").Where(u => u.Length > 0 && u != "about:blank");
+        if (((App)Application.Current).IsDetachedWindow) SessionStore.Append(urls);
+        else SessionStore.Save(urls);
     }
 
     /// <summary>タブの現在URL。休眠中は保持しているURLを返す。</summary>
@@ -160,56 +172,79 @@ public partial class MainWindow : Window
     {
         if (t.View is null) return t.SleepUrl;
         string? url;
-        try { url = t.View.CoreWebView2?.Source; } catch { return t.SleepUrl; }
+        try { url = t.View.CoreWebView2?.Source; } catch { url = null; }
         // mpvプレースホルダー(NavigateToString=about:blank)中は元動画のURLを実体として扱う
         // (これが無いとセッション保存・閉じタブ復元からmpv再生中のタブが消える)
         if (url == "about:blank" && t.MpvReturnUrl is not null) return t.MpvReturnUrl;
+        // 初期化前・ブラウザプロセス消失後(Source が about:blank に化ける/取れない)は最後に見た実URLへ戻す。
+        // これが無いと、落ちたブラウザのタブは「空タブ」として捨てられ、終了時にセッションごと消える
+        if (string.IsNullOrEmpty(url) || url == "about:blank") return t.LastUrl ?? url;
         return url;
     }
 
-    Task<CoreWebView2Environment> GetEnvAsync()
-        => _envTask ??= CoreWebView2Environment.CreateAsync(null, Paths.WebDataDir,
-            new CoreWebView2EnvironmentOptions
+    /// <summary>結果を待たないスクリプト実行。破棄済み/消失後の WebView では例外になるが、その Task を観測しないと
+    /// finalizer スレッドの UnobservedTaskException として crash.log に残るだけなので、ここで受け止めて捨てる。</summary>
+    static async void FireScript(CoreWebView2 core, string js)
+    {
+        try { await core.ExecuteScriptAsync(js); } catch { }
+    }
+
+    Task<CoreWebView2Environment> GetEnvAsync() => _envTask ??= CreateEnvAsync();
+
+    /// <summary>WebView2 環境の生成。再起動(テキストカーソルモード切替)の直後は旧プロセスのブラウザがまだ同じ
+    /// プロファイルで生きていて、引数の違う環境は作れない(実測: 生成が失敗する)。少し待って数回やり直す。</summary>
+    async Task<CoreWebView2Environment> CreateEnvAsync()
+    {
+        for (int attempt = 1; ; attempt++)
+        {
+            try
             {
-                // 軽量化フラグ:
-                //   process-per-site + renderer-process-limit=4: プロセス数を抑える。
-                //     ※2まで絞るとWarmTabs+アクティブでプロセス共有が常態化し、遷移先ページが
-                //       稼働中サイト(YouTube等)のレンダラー主スレッドを奪い合って遷移が重くなる
-                //   サイト分離は安全性のため既定で維持。明示的な低メモリ設定時だけ無効化
-                //   disk-cache-size/media-cache-size: ディスクキャッシュを128MB/50MBに制限
-                //   QuickIntensiveWakeUpThrottling...: 非表示ページのタイマーを早期に間引く(サスペンド発動までのつなぎ)
-                //   disable-renderer-accessibility: UIA走査によるアクセシビリティツリー構築を止める(スクリーンリーダー非対応化)
-                //   disable-notifications/speech-api/print-preview: 使わない機能のサービスを起動させない
-                //   disable-component-extensions-with-background-pages: 内蔵コンポーネント拡張の常駐を止める
-                //   disable-features=BackForwardCache: 戻る用のページ保持をやめてメモリ優先
-                //   Prerender2,NoStatePrefetch無効: 「表示していないページ」の投機的な先読み生成を丸ごと止める
-                //   MediaRouter,DialMediaRouteProvider無効: Chromecast探索の常駐を止める
-                //   GlobalMediaControls,LiveCaption無効: メディア操作UI・ライブ字幕MLを止める
-                //   AutofillServerCommunication無効: 入力補完のサーバー照会を止める(ローカル補完は残る)
-                //   SegmentationPlatform無効: 利用予測MLを止める
-                //   SmartScreen/追跡防止も既定で維持。任意サイトを開くブラウザでは保護を優先する
-                //   ※ --enable-low-end-device-mode と --js-flags=--optimize-for-size は、表示中タブの
-                //     V8実行やキャッシュまで遅くしてURL遷移の体感が悪化するため使わない
-                //     (裏タブのメモリはサスペンド/休眠側で回収済みで、これらの追加削減効果は小さい)
-                //
-                // Widevine DRM (U-NEXT/Netflix等の動画配信) を再生するために必要な2点:
-                //   ① msWidevinePlatform: WebView2 は Edge 本体と違い Widevine が既定で無効。
-                //      これを有効にしないと requestMediaKeySystemAccess('com.widevine.alpha') が
-                //      NotSupportedError で落ちる (PlayReady/ClearKey は既定で使えるので気付きにくい)。
-                //   ② --disable-component-update を付けない: Widevine CDM は
-                //      「WidevineCdm コンポーネント」として登録される。実体はランタイム同梱
-                //      (EdgeWebView\Application\<ver>\WidevineCdm) でダウンロードは不要だが、
-                //      component update 自体を切ると登録処理ごと飛ばされて CDM が見つからなくなる。
-                //      ※保護ON時はバックグラウンド通信も維持。保護OFFの旧低メモリ設定時だけ止める。
-                //   ①②どちらか欠けると U-NEXT は「再生エラーが発生しました。（sh_6012）」になる。
-                // 自動化誤判定対策・軽量化・proxyを一か所で構成する。
-                // サイト分離/SmartScreenを切る旧設定は EnableBrowserProtections=false の場合だけ。
-                AdditionalBrowserArguments = BrowserOptions.BuildArguments(_settings),
-                // 拡張(uBlock等)が置かれていないときは拡張基盤ごと起動しない
-                AreBrowserExtensionsEnabled = !_useBuiltinBlock,
-                // Microsoft は任意サイトを開く WebView2 ブラウザでは有効化を推奨している。
-                EnableTrackingPrevention = _settings.EnableBrowserProtections,
-            });
+                return await CoreWebView2Environment.CreateAsync(null, Paths.WebDataDir,
+                    new CoreWebView2EnvironmentOptions
+                    {
+                        // 軽量化フラグ:
+                        //   process-per-site + renderer-process-limit=4: プロセス数を抑える。
+                        //     ※2まで絞るとWarmTabs+アクティブでプロセス共有が常態化し、遷移先ページが
+                        //       稼働中サイト(YouTube等)のレンダラー主スレッドを奪い合って遷移が重くなる
+                        //   サイト分離は安全性のため既定で維持。明示的な低メモリ設定時だけ無効化
+                        //   disk-cache-size/media-cache-size: ディスクキャッシュを128MB/50MBに制限
+                        //   QuickIntensiveWakeUpThrottling...: 非表示ページのタイマーを早期に間引く(サスペンド発動までのつなぎ)
+                        //   disable-renderer-accessibility: UIA走査によるアクセシビリティツリー構築を止める(スクリーンリーダー非対応化)
+                        //   disable-notifications/speech-api/print-preview: 使わない機能のサービスを起動させない
+                        //   disable-component-extensions-with-background-pages: 内蔵コンポーネント拡張の常駐を止める
+                        //   disable-features=BackForwardCache: 戻る用のページ保持をやめてメモリ優先
+                        //   Prerender2,NoStatePrefetch無効: 「表示していないページ」の投機的な先読み生成を丸ごと止める
+                        //   MediaRouter,DialMediaRouteProvider無効: Chromecast探索の常駐を止める
+                        //   GlobalMediaControls,LiveCaption無効: メディア操作UI・ライブ字幕MLを止める
+                        //   AutofillServerCommunication無効: 入力補完のサーバー照会を止める(ローカル補完は残る)
+                        //   SegmentationPlatform無効: 利用予測MLを止める
+                        //   SmartScreen/追跡防止も既定で維持。任意サイトを開くブラウザでは保護を優先する
+                        //   ※ --enable-low-end-device-mode と --js-flags=--optimize-for-size は、表示中タブの
+                        //     V8実行やキャッシュまで遅くしてURL遷移の体感が悪化するため使わない
+                        //     (裏タブのメモリはサスペンド/休眠側で回収済みで、これらの追加削減効果は小さい)
+                        //
+                        // Widevine DRM (U-NEXT/Netflix等の動画配信) を再生するために必要な2点:
+                        //   ① msWidevinePlatform: WebView2 は Edge 本体と違い Widevine が既定で無効。
+                        //      これを有効にしないと requestMediaKeySystemAccess('com.widevine.alpha') が
+                        //      NotSupportedError で落ちる (PlayReady/ClearKey は既定で使えるので気付きにくい)。
+                        //   ② --disable-component-update を付けない: Widevine CDM は
+                        //      「WidevineCdm コンポーネント」として登録される。実体はランタイム同梱
+                        //      (EdgeWebView\Application\<ver>\WidevineCdm) でダウンロードは不要だが、
+                        //      component update 自体を切ると登録処理ごと飛ばされて CDM が見つからなくなる。
+                        //      ※保護ON時はバックグラウンド通信も維持。保護OFFの旧低メモリ設定時だけ止める。
+                        //   ①②どちらか欠けると U-NEXT は「再生エラーが発生しました。（sh_6012）」になる。
+                        // 自動化誤判定対策・軽量化・proxyを一か所で構成する。
+                        // サイト分離/SmartScreenを切る旧設定は EnableBrowserProtections=false の場合だけ。
+                        AdditionalBrowserArguments = BrowserOptions.BuildArguments(_settings),
+                        // 拡張(uBlock等)が置かれていないときは拡張基盤ごと起動しない
+                        AreBrowserExtensionsEnabled = !_useBuiltinBlock,
+                        // Microsoft は任意サイトを開く WebView2 ブラウザでは有効化を推奨している。
+                        EnableTrackingPrevention = _settings.EnableBrowserProtections,
+                    });
+            }
+            catch when (attempt < 10) { await Task.Delay(500); }
+        }
+    }
 
     /// <summary>%APPDATA%\Karu\extensions 直下の展開済み拡張をプロファイルにインストールする（初回のみ）</summary>
     async Task LoadExtensionsAsync(CoreWebView2Profile profile)
@@ -319,13 +354,33 @@ public partial class MainWindow : Window
             if (tab == _active) HideTitleBarFlame();
             // 中断・失敗時は元ページが残るので、そこに出した被いを引っ込める
             // (成功時は旧ドキュメントごと消えるため不要。新ページの被いはPageCover自身が管理する)
-            if (!args.IsSuccess)
-                try { _ = core.ExecuteScriptAsync("window.__karuCoverHide&&window.__karuCoverHide()"); }
-                catch { }
+            if (!args.IsSuccess) FireScript(core, "window.__karuCoverHide&&window.__karuCoverHide()");
             // キーボード主体で使うため、読み込み完了時にページへフォーカスを渡す
             if (tab == _active && !IsOverlayOpen) tab.View?.Focus();
         };
         core.WebMessageReceived += (_, args) => OnWebMessage(tab, args);
+        // 最後に見た実URL。ブラウザプロセス消失時の復旧とセッション保存の拠り所
+        core.SourceChanged += (_, _) =>
+        {
+            string? s = null;
+            try { s = core.Source; } catch { }
+            if (!string.IsNullOrEmpty(s) && s != "about:blank") tab.LastUrl = s;
+        };
+        // WebView2 のプロセス障害。ブラウザプロセス消失は全タブ分のイベントが届くので復旧は一度にまとめる。
+        // レンダラー落ちは表示中なら再読み込み、裏なら休眠(URLだけ残して次に開くとき読み直す)
+        core.ProcessFailed += (_, e) =>
+        {
+            switch (e.ProcessFailedKind)
+            {
+                case CoreWebView2ProcessFailedKind.BrowserProcessExited:
+                    RecoverFromBrowserProcessExit();
+                    break;
+                case CoreWebView2ProcessFailedKind.RenderProcessExited:
+                    if (tab == _active) { try { core.Reload(); } catch { } }
+                    else HibernateTab(tab);
+                    break;
+            }
+        };
         // 非アクティブタブ(裏で全画面のまま切替済み等)のイベントで窓の状態を動かさない
         core.ContainsFullScreenElementChanged += (_, _) =>
         {
@@ -409,8 +464,7 @@ public partial class MainWindow : Window
                 blocked = r?.Blocked ?? false;
             }
             // 差し替えられなかった広告はページ側で消音+被いに回す
-            try { _ = core.ExecuteScriptAsync($"window.__karuTwitchAd&&window.__karuTwitchAd({(blocked ? "true" : "false")})"); }
-            catch { }
+            FireScript(core, $"window.__karuTwitchAd&&window.__karuTwitchAd({(blocked ? "true" : "false")})");
             if (body is null) return;
 
             var bytes = new MemoryStream(Encoding.UTF8.GetBytes(body));
@@ -429,7 +483,7 @@ public partial class MainWindow : Window
         try { raw = args.TryGetWebMessageAsString(); } catch { }
         // 注入スクリプト由来の証明としてトークン接頭辞を検証する。
         // これが無いと任意のページのJSがタブ操作コマンドを偽装できてしまう。
-        if (raw is null || !raw.StartsWith(Injections.MessageToken + "|")) return;
+        if (raw is null || !raw.StartsWith(Injections.MessageToken + "|", StringComparison.Ordinal)) return;
         var cmd = raw[(Injections.MessageToken.Length + 1)..];
         // YouTube広告スキップ: 座標付きコマンドなので switch の前で処理する
         if (cmd.StartsWith(YouTubeAdSkip.Command + "|", StringComparison.Ordinal)) { _ = TrustedAdSkipClickAsync(tab, cmd); return; }
@@ -502,6 +556,7 @@ public partial class MainWindow : Window
         var urls = Tabs.Select(t => TabUrl(t) ?? "")
                        .Where(u => u.Length > 0 && u != "about:blank");
         var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+        if (((App)Application.Current).IsDetachedWindow) psi.ArgumentList.Add(App.DetachedFlag);
         foreach (var url in urls) psi.ArgumentList.Add(url);
         Process.Start(psi);
         Close();

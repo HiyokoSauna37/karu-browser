@@ -70,11 +70,17 @@ static class NetworkRouting
         };
     }
 
+    /// <summary>ProxyServer に何か書いてあるのに書式が通らない状態。黙って直結で動かず、起動時に警告する。</summary>
+    public static bool HasInvalidProxy(AppSettings settings)
+        => !string.IsNullOrWhiteSpace(settings.ProxyServer) && NormalizeProxy(settings.ProxyServer) is null;
+
     public static string StatusText(AppSettings settings)
     {
         var proxy = NormalizeProxy(settings.ProxyServer);
         if (proxy is not null)
             return $"検閲回避: プロキシ ON ({new Uri(proxy).Host}) — 変更は再起動後";
+        if (HasInvalidProxy(settings))
+            return "検閲回避: ProxyServer の書式が不正 — プロキシなし(直接接続)で動作中";
         return "検閲回避: プロキシ OFF — settings.json で設定";
     }
 }

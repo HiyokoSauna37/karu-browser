@@ -52,7 +52,9 @@ public class AppSettings
         PressureAvailableGB = double.IsFinite(PressureAvailableGB)
             ? Math.Clamp(PressureAvailableGB, 0.25, 1024) : 1.5;
         ParkMinutes = Math.Clamp(ParkMinutes, 1, 24 * 60);
-        ProxyServer = NetworkRouting.NormalizeProxy(ProxyServer) ?? "";
+        // 書式の通らない値も消さない(消すと設定したつもりの利用者が気付けない)。使う側が毎回 NormalizeProxy で判定し、
+        // 不正なら起動時に警告してプロキシなしで動く
+        ProxyServer = (ProxyServer ?? "").Trim();
     }
 }
 

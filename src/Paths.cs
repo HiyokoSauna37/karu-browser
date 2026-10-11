@@ -4,13 +4,21 @@ namespace Karu;
 
 static class Paths
 {
-    /// <summary>設定・お気に入り・ブロックリスト置き場 (%APPDATA%\Karu)</summary>
-    public static readonly string AppDataDir =
+    /// <summary>設定・お気に入り・ブロックリスト置き場 (%APPDATA%\Karu)。
+    /// 環境変数 KARU_PROFILE_DIR があればそのフォルダを使う(別プロファイルで検証用インスタンスを起動するため)。</summary>
+    public static readonly string AppDataDir = ProfileOverride() ??
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Karu");
 
-    /// <summary>Cookie・ログイン情報などWebView2のプロファイル (%LOCALAPPDATA%\Karu)</summary>
-    public static readonly string WebDataDir =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Karu", "WebView2Data");
+    /// <summary>Cookie・ログイン情報などWebView2のプロファイル (%LOCALAPPDATA%\Karu)。KARU_PROFILE_DIR 指定時はその配下。</summary>
+    public static readonly string WebDataDir = ProfileOverride() is { } profile
+        ? Path.Combine(profile, "WebView2Data")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Karu", "WebView2Data");
+
+    static string? ProfileOverride()
+    {
+        var dir = Environment.GetEnvironmentVariable("KARU_PROFILE_DIR");
+        return string.IsNullOrWhiteSpace(dir) ? null : Path.GetFullPath(dir);
+    }
 
     /// <summary>ここに展開した拡張機能(uBlock Origin等)を起動時に自動ロードする</summary>
     public static readonly string ExtensionsDir = Path.Combine(AppDataDir, "extensions");

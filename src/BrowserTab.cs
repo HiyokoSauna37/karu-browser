@@ -34,6 +34,10 @@ public class BrowserTab : INotifyPropertyChanged
     /// <summary>直近にYouTube広告スキップの本物クリックを打った時刻(連打抑止)。</summary>
     public DateTime LastAdSkipClick = DateTime.MinValue;
 
+    /// <summary>最後に見た実URL(about:blank 以外)。ブラウザプロセス消失後は CoreWebView2.Source が about:blank に
+    /// 化けるか取れなくなる(実測)ため、休眠とセッション保存はこれへ落ちる。</summary>
+    public string? LastUrl;
+
     /// <summary>休眠中かどうか。タブUIの表示(半透明化)にもバインドされる。</summary>
     public bool IsAsleep => View is null;
 

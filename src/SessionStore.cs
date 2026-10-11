@@ -22,4 +22,14 @@ static class SessionStore
         try { Paths.AtomicWrite(FilePath, JsonSerializer.Serialize(urls.ToArray())); }
         catch { }
     }
+
+    /// <summary>保存済みセッションへ URL を合流させる(順序維持・重複除外)。分離ウィンドウの終了時に使う:
+    /// 各窓が自分のタブで丸ごと上書きすると、最後に閉じた窓が他の窓のタブを消してしまう。</summary>
+    public static void Append(IEnumerable<string> urls)
+    {
+        var merged = new List<string>(Load());
+        foreach (var u in urls)
+            if (!merged.Contains(u)) merged.Add(u);
+        Save(merged);
+    }
 }

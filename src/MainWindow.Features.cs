@@ -465,7 +465,7 @@ public partial class MainWindow
         _settings.FocusMode = !_settings.FocusMode;
         SettingsStore.Save(_settings);
         RefreshFocusUi();
-        foreach (var t in Tabs)
+        foreach (var t in Tabs.ToList()) // await 中にタブが増減しても列挙が壊れないようスナップショット
         {
             var c = t.View?.CoreWebView2;
             if (c is null) continue;
@@ -616,7 +616,7 @@ public partial class MainWindow
         SettingsStore.Save(_settings);
         RefreshQualityUi();
         // 開いている全タブに即時反映 (注入スクリプトが window.__karuMaxQ を毎tick参照している)
-        foreach (var t in Tabs)
+        foreach (var t in Tabs.ToList()) // await 中にタブが増減しても列挙が壊れないようスナップショット
         {
             var c = t.View?.CoreWebView2;
             if (c is null) continue;
@@ -783,6 +783,7 @@ public partial class MainWindow
         try
         {
             var psi = new ProcessStartInfo(exe) { UseShellExecute = true };
+            psi.ArgumentList.Add(App.DetachedFlag); // 分離窓は終了時にセッションを上書きせず合流させる
             psi.ArgumentList.Add(url);
             Process.Start(psi);
         }

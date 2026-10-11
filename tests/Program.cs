@@ -76,6 +76,19 @@ var adDefaults = new AppSettings();
 adDefaults.Normalize();
 Check(adDefaults.YouTubeAdSeek, "ad seek on by default");
 
+Equal("mailto:a@b.example", UrlUtil.Normalize("mailto:a@b.example"), "mailto passes through to the mail client");
+Check(UrlUtil.Normalize("ftp://x.example/z").Contains("google.com/search", StringComparison.Ordinal),
+    "explicit unsupported scheme is searched, not prefixed with https://");
+Check(UrlUtil.Normalize("chrome://settings").Contains("google.com/search", StringComparison.Ordinal), "internal scheme is searched");
+Equal("https://example.com:8080/x", UrlUtil.Normalize("example.com:8080/x"), "host:port with path still gets https");
+
+var badProxy = new AppSettings { ProxyServer = " http://user:pw@proxy.example:8080 " };
+badProxy.Normalize();
+Equal("http://user:pw@proxy.example:8080", badProxy.ProxyServer, "invalid proxy is kept (trimmed), not silently erased");
+Check(!NetworkRouting.IsProxyEnabled(badProxy) && NetworkRouting.HasInvalidProxy(badProxy), "invalid proxy is reported and not used");
+Check(NetworkRouting.StatusText(badProxy).Contains("不正", StringComparison.Ordinal), "menu shows the invalid proxy state");
+Check(!NetworkRouting.HasInvalidProxy(new AppSettings()), "empty proxy is not an error");
+
 var invalidSettings = new AppSettings
 {
     MaxFps = -1,

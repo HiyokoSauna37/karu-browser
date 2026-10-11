@@ -35,7 +35,7 @@ Chromium-based browsers are memory-hungry, and most "lightweight browser" altern
 - **YouTube-focused tuning** — in-player ad skipping, playback quality cap, forced H.264 (avoids VP9/AV1 decode cost), a "focus mode" that hides comments/related/shorts shelves, and an on-player speed button. The Skip button is pressed with a **real, trusted click injected through CDP**: YouTube's player now records a scripted `click()` (`isTrusted: false`) as an ad blocker and refuses to skip, and it plants an invisible decoy skip button to catch scripts, so Karu only clicks a button that is actually visible at the point it clicks. Ads without a skip button are still jumped to their end; set `YouTubeAdSeek` to `false` in `settings.json` to stop that (YouTube reports every seek inside an ad) and just mute until Skip appears.
 - **[mpv](https://mpv.io/) handoff** (`Ctrl+M`) — plays the current video in mpv (via yt-dlp) and collapses the page to a lightweight placeholder once playback is confirmed, keeping playback position for switching back.
 - **Translate the page** (`Ctrl+Shift+Y`) — like Chrome's "Translate this page": rewrites the body into Japanese in place; press again to flip back (translation ⇄ original toggle). Links and `<code>` are kept intact and repositioned to the correct Japanese word order. See [Translating pages](#translating-pages).
-- **Pop a tab into its own window** (`Ctrl+Shift+D`) — moves the current tab into a new window, for side-by-side viewing.
+- **Pop a tab into its own window** (`Ctrl+Shift+D`) — moves the current tab into a new window, for side-by-side viewing. When a detached window closes, its tabs are merged into the saved session instead of replacing it.
 - **Presents as a normal browser** — hides `navigator.webdriver` and scopes the low-spec spoof to YouTube only, so bot checks like Cloudflare are less likely to flag it as automated.
 - **Censorship-routing controls** — supports HTTP(S)/SOCKS5 proxies. Page traffic, translation, and Twitch interception use the same proxy. While a proxy is active, non-proxied WebRTC UDP and QUIC are disabled to avoid a direct IP leak.
 - **Ad/tracker blocking** — a built-in domain blocklist (`%APPDATA%\Karu\blocklist.txt`). **Sideloaded extensions cannot do this**: WebView2 runs no content scripts, and MV2 `webRequest` blocking has no effect either — measured, with uBlock Origin loaded and blocking nothing while costing memory.
@@ -121,12 +121,14 @@ Example censorship-routing settings:
 }
 ```
 
-- `ProxyServer`: `http://host:port`, `https://host:port`, or `socks5://host:port`. Leave empty to use the system route. Embedded credentials are rejected so they cannot leak through process listings.
+- `ProxyServer`: `http://host:port`, `https://host:port`, or `socks5://host:port`. Leave empty to use the system route. Embedded credentials are rejected so they cannot leak through process listings. If the value does not parse, Karu starts without a proxy and says so in a warning dialog and in the menu; the value is left in `settings.json` for you to fix.
 - `EnableBrowserProtections`: the default `true` keeps site isolation, SmartScreen, and WebView2 tracking prevention enabled. `false` restores the older, more aggressive low-memory setup and is not recommended for browsing arbitrary sites.
 
 While `ProxyServer` is active, handoff to external mpv or Edge is disabled because Karu cannot guarantee that those processes inherit its route. Leave it empty when using a system-wide VPN if you need those integrations.
 
 Karu does not ship a relay service. Bypassing DNS/IP/SNI-level blocks requires a reachable external proxy, VPN, or Tor that also resolves destination names remotely. WebView2 has no supported per-app DoH API, so Karu does not claim DoH support through Chromium-internal flags that may be ignored.
+
+Set the `KARU_PROFILE_DIR` environment variable to run Karu against a separate profile (settings and WebView2 data under that folder), for example to test a build without touching your real session.
 
 Unpacked Chromium extensions under `%APPDATA%\Karu\extensions\` are loaded, but **do not put an ad blocker there**. WebView2 runs neither content scripts nor MV2 `webRequest` blocking, so it blocks nothing — and the mere presence of an extension disables the built-in blocklist (measured: ~105 MB for the extension renderer alone, zero requests blocked).
 
