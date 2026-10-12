@@ -351,14 +351,17 @@ static class Injections
     ///     広告の読み込みタイムアウト(10秒)が切れるまで本編へ進まない(2026-10-12 実測: 10本中5本が10秒超)。
     ///     だからシークはしない。
     ///   - 広告の再生位置が実時間の2.5倍より速く進むと検知として報告され("n.k_")、プリロールでは
-    ///     onAbnormalityDetected まで発火する。早送りはその手前の2倍に留める(adSpeedUp=false なら等速)。
+    ///     onAbnormalityDetected まで発火する。実時間は再生開始(onAdStart)から数えるので、最初の0.3秒だけ等速で
+    ///     流してから2.4倍にする(adSpeedUp=false なら等速)。
+    ///   - 広告の間はプレーヤーをKaruのロゴの被いで隠す(adCover=false で出さない)。被いはクリックで外せる。
     /// </summary>
-    public static string YouTube(bool focusMode, string maxQuality, bool adSpeedUp) => $$"""
+    public static string YouTube(bool focusMode, string maxQuality, bool adSpeedUp, bool adCover) => $$"""
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   window.__karuFocus = {{JsBool(focusMode)}};
   window.__karuMaxQ = {{System.Text.Json.JsonSerializer.Serialize(maxQuality)}};
   const AD_SPEED_UP = {{JsBool(adSpeedUp)}};
+  const AD_COVER = {{JsBool(adCover)}};
 
   const HIDE = [
     '#secondary', '#related', 'ytd-watch-next-secondary-results-renderer',
@@ -466,11 +469,54 @@ static class Injections
     }
     return null;
   };
-  // 広告中の再生速度。2.5倍を超えると検知されるので2倍で止める(上の注記参照)
-  const AD_RATE = 2;
-  // 広告の状態。key は今流れている広告メディア(src と長さ)で、連続広告では1本ごとにクリック回数を数え直す。
-  // contentRate は広告でない間の再生速度で、広告用に上げた速度を本編へ持ち越さないよう終了時に戻す
-  const ad = { on: false, muted: false, sped: false, clicks: 0, lastClick: 0, key: '', contentRate: 1 };
+  // 広告中の再生速度と、その前に等速で流す長さ(再生位置の秒)。プレーヤーは広告の再生開始からの実時間が
+  // 再生位置×0.4 を下回ると(=2.5倍超)検知する。開始時刻を記録するのは再生が始まった後なので、出だしから
+  // 2.4倍だと記録が0.08秒遅れただけで割り込む。最初の0.3秒を等速にして余裕を0.25秒以上取る(上の注記参照)
+  const AD_RATE = 2.4, AD_LEAD = 0.3;
+  // 広告の状態。key は今流れている広告メディア(src と長さ)で、連続広告では1本ごとにクリック回数と等速区間を
+  // 数え直す(t0 はその広告を最初に見た時の再生位置)。contentRate は広告でない間の再生速度、setRate は
+  // 広告中に自分で入れた速度で、広告用の速度を本編へ持ち越さないよう終了時に戻すのに使う
+  const ad = { on: false, muted: false, sped: false, clicks: 0, lastClick: 0, key: '', t0: 0, setRate: 1, contentRate: 1 };
+  // 広告中の被い。広告の映像をKaruのロゴで隠す。プレーヤーの中に置くので全画面・シアター・ミニプレーヤーにも付いていく。
+  // YouTube は Trusted Types で innerHTML を禁じているので、ロゴは data: URL の背景画像、文字は textContent で作る。
+  // 被いへのクリックはプレーヤーへ渡さない(再生/停止や広告主ページを開くクリックにしない)。クリックされたら
+  // その広告の間だけ外す(自動スキップが効かないときに自分で押せるように)
+  const LOGO = 'url("data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><defs>' +
+    '<linearGradient id="o" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#B3401F"/><stop offset="55%" stop-color="#E8672E"/><stop offset="100%" stop-color="#F7A93C"/></linearGradient>' +
+    '<linearGradient id="i" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#F5952E"/><stop offset="100%" stop-color="#FFDD8A"/></linearGradient></defs>' +
+    '<g transform="translate(100,100) scale(1.385) translate(-101,-83)">' +
+    '<path fill="url(#o)" d="M100,14 C128,44 154,66 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,58 88,34 100,14 Z"/>' +
+    '<path fill="url(#i)" d="M101,72 C112,86 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,92 97,98 102,102 C103,90 100,82 101,72 Z"/></g></svg>') + '")';
+  const cover = { el: null, off: false, passTimer: 0 };
+  const showCover = p => {
+    if (!AD_COVER || cover.off) return;
+    if (!cover.el) {
+      const el = document.createElement('div');
+      el.id = 'karu-ad-cover';
+      el.title = 'クリックでこの広告を表示';
+      el.style.cssText = 'position:absolute;inset:0;z-index:2147483000;background:#0f0f0f;cursor:pointer;' +
+        'display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+        'color:#9b8f82;font:600 13px "Segoe UI",sans-serif;letter-spacing:.05em';
+      const logo = document.createElement('div');
+      logo.style.cssText = 'width:72px;height:72px;background:center/contain no-repeat ' + LOGO;
+      const label = document.createElement('div');
+      label.textContent = '広告をスキップしています';
+      el.append(logo, label);
+      for (const t of ['pointerdown', 'mousedown', 'mouseup', 'dblclick']) el.addEventListener(t, e => e.stopPropagation());
+      el.addEventListener('click', e => { e.stopPropagation(); cover.off = true; hideCover(); });
+      cover.el = el;
+    }
+    if (cover.el.parentNode !== p) p.appendChild(cover.el);
+  };
+  const hideCover = () => { if (cover.el) cover.el.remove(); };
+  // 被いの下のスキップボタンへ本物のクリックを通すため、クリックが届くまでの間だけ被いを素通りにする
+  const passCover = ms => {
+    if (!cover.el) return;
+    cover.el.style.pointerEvents = 'none';
+    clearTimeout(cover.passTimer);
+    cover.passTimer = setTimeout(() => { cover.passTimer = 0; if (cover.el) cover.el.style.pointerEvents = ''; }, ms);
+  };
   // 本編のプレーヤー。トップページでは masthead 広告用の .html5-video-player が先に並ぶので id で取る
   const mainPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
   const adTick = () => {
@@ -487,32 +533,56 @@ static class Injections
         }
         // 広告用の速度が残っていれば広告前の速度へ戻す。プレーヤーが本編の速度を入れ直していれば触らない。
         // 終了直後の tick はメディア切替中のことがあるので contentRate はここでは取り直さない
-        if (ad.sped && v && v.playbackRate === AD_RATE) v.playbackRate = ad.contentRate;
+        if (ad.sped && v && v.playbackRate === ad.setRate) v.playbackRate = ad.contentRate;
         ad.muted = ad.sped = false;
+        hideCover();
+        cover.off = false;
         return;
       }
       if (v) ad.contentRate = v.playbackRate;
       return;
     }
     if (!ad.on) { ad.on = true; ad.key = ''; }
+    showCover(p);
     if (v) {
       const key = v.src + '|' + v.duration;
-      if (key !== ad.key) { ad.key = key; ad.clicks = 0; ad.lastClick = 0; }
+      if (key !== ad.key) { ad.key = key; ad.clicks = 0; ad.lastClick = 0; ad.t0 = v.currentTime; }
       if (!v.muted) { v.muted = true; ad.muted = true; }
-      if (AD_SPEED_UP && v.playbackRate !== AD_RATE) { v.playbackRate = AD_RATE; ad.sped = true; }
+      if (AD_SPEED_UP) {
+        const rate = v.currentTime - ad.t0 >= AD_LEAD ? AD_RATE : 1;
+        if (v.playbackRate !== rate) { v.playbackRate = rate; ad.sped = true; ad.setRate = rate; }
+      }
     }
-    // スキップボタンが見えたらホストに本物のクリックを頼む(広告1本あたり最大8回・0.7秒間隔)
+    // スキップボタンが見えたらホストに本物のクリックを頼む(広告1本あたり最大8回・0.7秒間隔)。
+    // 被いは自分のものなので、ヒット判定では素通りさせて「被いの下で見えているボタン」を探す
+    const passing = cover.passTimer !== 0;
+    if (cover.el) cover.el.style.pointerEvents = 'none';
     const s = visibleSkip(p);
+    if (cover.el && !passing) cover.el.style.pointerEvents = '';
     const now = Date.now();
     if (s && ad.clicks < 8 && now - ad.lastClick > 700) {
       ad.clicks++; ad.lastClick = now;
+      passCover(1500);
       send('adSkip|' + s.x + '|' + s.y);
     }
   };
+  // 広告の始まりはプレーヤーの class の変化で即座に拾い(被いと消音を最初から効かせる)、広告中は0.1秒ごとに
+  // 見直す(スキップボタンが出た瞬間に押し、等速区間の終わりですぐ速度を上げる)。広告が無い間は下の0.5秒ループだけ
+  const classWatch = new MutationObserver(adTick);
+  let watched = null;
+  const watchPlayer = () => {
+    const p = mainPlayer();
+    if (!p || p === watched) return;
+    classWatch.disconnect();
+    classWatch.observe(p, { attributes: true, attributeFilter: ['class'] });
+    watched = p;
+  };
+  setInterval(() => { if (ad.on) adTick(); }, 100);
 
   let hid = false; // 集中モードで実際に要素を隠しているか（無駄な復元走査を避ける）
   setInterval(() => {
     // --- 広告スキップ (バックグラウンド音声再生中も動かす) ---
+    watchPlayer();
     adTick();
     // --- ここから表示中タブのみ (非表示タブではDOM走査を止めてCPUを節約) ---
     if (document.hidden) return;

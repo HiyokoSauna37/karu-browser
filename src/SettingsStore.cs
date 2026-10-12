@@ -17,10 +17,12 @@ public class AppSettings
     /// <summary>Twitchのサーバー側挿入広告(SSAI)を、プレイリストを取り直して差し替えることで回避する。
     /// 消せなかった広告は消音+被いに切り替える。反映は再読み込み後 (TwitchAds.cs)</summary>
     public bool TwitchAdBlock { get; set; } = true;
-    /// <summary>YouTube広告を2倍速(ミュート)で流し、スキップボタンが出るまでの時間とスキップできない広告を半分にする。
-    /// プレーヤーは広告が実時間の2.5倍より速く進むと検知して報告するので、それより遅い2倍に留めている。
+    /// <summary>YouTube広告を2.4倍速(ミュート)で流し、スキップボタンが出るまでの時間とスキップできない広告を短くする。
+    /// プレーヤーは広告が実時間の2.5倍より速く進むと検知して報告するので、最初の0.3秒を等速にしてから2.4倍に留めている。
     /// false で等速。スキップボタンはこの設定に関係なく、出た時点でCDP経由の本物のクリックで押す。反映は再読み込み後</summary>
     public bool YouTubeAdSpeedUp { get; set; } = true;
+    /// <summary>YouTube広告の間、プレーヤーをKaruのロゴの被いで隠す(クリックするとその広告の間だけ外れる)。反映は再読み込み後</summary>
+    public bool YouTubeAdCover { get; set; } = true;
 
     // ---- ネットワーク / 検閲回避 (変更後は再起動) ----
     /// <summary>HTTP(S) または SOCKS5 proxy。例: socks5://127.0.0.1:9050。空ならシステム設定。</summary>

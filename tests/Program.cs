@@ -67,15 +67,18 @@ Check(clickSeq.Count == 2 && clickSeq[0].Contains("mousePressed") && clickSeq[1]
     "trusted click is press then release (no mouseMoved: it never completes on a hidden WebView)");
 Check(clickSeq.All(j => j.Contains("\"button\":\"left\"") && j.Contains("\"clickCount\":1")
     && j.Contains("\"x\":10") && j.Contains("\"y\":20")), "trusted click is a left single click at the point");
-var ytScript = Injections.YouTube(false, "", true);
+var ytScript = Injections.YouTube(false, "", true, true);
 Check(ytScript.Contains(Injections.MessageToken, StringComparison.Ordinal), "YouTube script carries the message token");
 Check(ytScript.Contains("adSkip|", StringComparison.Ordinal), "YouTube script asks the host for the skip click");
 Check(!ytScript.Contains(".click()", StringComparison.Ordinal), "YouTube script never clicks ad controls synthetically");
 Check(!ytScript.Contains("currentTime =", StringComparison.Ordinal),
     "YouTube script never seeks (any seek inside an ad is reported, and an early one stalls the ad for 10 s)");
-Check(ytScript.Contains("const AD_RATE = 2;", StringComparison.Ordinal),
-    "ad speed-up stays under the player's 2.5x media-time vs wall-clock check");
-Check(Injections.YouTube(false, "", false).Contains("const AD_SPEED_UP = false", StringComparison.Ordinal), "ad speed-up can be disabled");
+Check(ytScript.Contains("const AD_RATE = 2.4, AD_LEAD = 0.3;", StringComparison.Ordinal),
+    "ad speed-up stays under the player's 2.5x media-time vs wall-clock check, after a 1x lead-in");
+Check(!ytScript.Contains(".innerHTML", StringComparison.Ordinal),
+    "YouTube script never assigns innerHTML (YouTube enforces Trusted Types, so it would throw)");
+Check(Injections.YouTube(false, "", false, true).Contains("const AD_SPEED_UP = false", StringComparison.Ordinal), "ad speed-up can be disabled");
+Check(Injections.YouTube(false, "", true, false).Contains("const AD_COVER = false", StringComparison.Ordinal), "ad cover can be disabled");
 var blocker = new AdBlocker();
 blocker.LoadLines(["# comment", "", "doubleclick.net", " googlesyndication.com "]);
 Check(blocker.Count == 2, "blocklist lines: comments and blanks skipped, entries trimmed");
@@ -91,6 +94,7 @@ Check(!blocker.ShouldBlock("https://www.youtube.com/watch?v=x"), "unlisted host 
 var adDefaults = new AppSettings();
 adDefaults.Normalize();
 Check(adDefaults.YouTubeAdSpeedUp, "ad speed-up on by default");
+Check(adDefaults.YouTubeAdCover, "ad cover on by default");
 
 Equal("mailto:a@b.example", UrlUtil.Normalize("mailto:a@b.example"), "mailto passes through to the mail client");
 Check(UrlUtil.Normalize("ftp://x.example/z").Contains("google.com/search", StringComparison.Ordinal),
