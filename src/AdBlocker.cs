@@ -6,10 +6,23 @@ namespace Karu;
 /// ドメイン単位の簡易広告・トラッカーブロッカー。
 /// %APPDATA%\Karu\blocklist.txt（1行1ドメイン、# はコメント）を読み込み、
 /// リクエスト先ホストがリスト内ドメインまたはそのサブドメインなら遮断する。
+/// ただし <see cref="DetectionProbes"/> の URL はドメインが一致しても通す。
 /// </summary>
 public class AdBlocker
 {
     static readonly string FilePath = Path.Combine(Paths.AppDataDir, "blocklist.txt");
+
+    /// <summary>
+    /// 広告ブロッカー検出用のおとり(ホスト, パス)。YouTube はこれらが取れるかで広告ブロッカーの有無を判定し、
+    /// 結果を再生のたびにサーバーへ送る(ad_status.js → DCLKSTAT、pagead/id → 検出項目 "b.f_")。
+    /// どちらも広告の中身ではなく、止めても広告は1本も減らずに「広告ブロッカー使用」と記録されるだけなので、
+    /// doubleclick.net を遮断していても通す(2026-10-12、Karu で DCLKSTAT=3 と "b.f_" 検出を実測)。
+    /// </summary>
+    static readonly (string Host, string Path)[] DetectionProbes =
+    [
+        ("static.doubleclick.net", "/instream/ad_status.js"),
+        ("googleads.g.doubleclick.net", "/pagead/id"),
+    ];
 
     readonly HashSet<string> _domains = new(StringComparer.OrdinalIgnoreCase);
 
@@ -21,17 +34,21 @@ public class AdBlocker
         {
             try { File.WriteAllText(FilePath, DefaultList); } catch { }
         }
+        string[] lines = [];
+        try { lines = File.ReadAllLines(FilePath); } catch { }
+        LoadLines(lines);
+    }
+
+    /// <summary>blocklist.txt と同じ書式の行を読み込む(空行と # で始まる行は無視)。</summary>
+    internal void LoadLines(IEnumerable<string> lines)
+    {
         _domains.Clear();
-        try
+        foreach (var raw in lines)
         {
-            foreach (var raw in File.ReadAllLines(FilePath))
-            {
-                var line = raw.Trim();
-                if (line.Length == 0 || line.StartsWith('#')) continue;
-                _domains.Add(line);
-            }
+            var line = raw.Trim();
+            if (line.Length == 0 || line.StartsWith('#')) continue;
+            _domains.Add(line);
         }
-        catch { }
     }
 
     /// <summary>
@@ -54,6 +71,10 @@ public class AdBlocker
         if (_domains.Count == 0) return false;
         if (!Uri.TryCreate(uri, UriKind.Absolute, out var u)) return false;
         var host = u.Host;
+        foreach (var (probeHost, probePath) in DetectionProbes)
+            if (host.Equals(probeHost, StringComparison.OrdinalIgnoreCase) &&
+                u.AbsolutePath.Equals(probePath, StringComparison.Ordinal))
+                return false;
 
         // host 自身と親ドメインを順に照合 (ads.example.com → example.com → com)
         for (int i = 0; i >= 0 && i < host.Length;)

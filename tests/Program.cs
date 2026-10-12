@@ -71,10 +71,26 @@ var ytScript = Injections.YouTube(false, "", true);
 Check(ytScript.Contains(Injections.MessageToken, StringComparison.Ordinal), "YouTube script carries the message token");
 Check(ytScript.Contains("adSkip|", StringComparison.Ordinal), "YouTube script asks the host for the skip click");
 Check(!ytScript.Contains(".click()", StringComparison.Ordinal), "YouTube script never clicks ad controls synthetically");
-Check(Injections.YouTube(false, "", false).Contains("const AD_SEEK = false", StringComparison.Ordinal), "ad seek can be disabled");
+Check(!ytScript.Contains("currentTime =", StringComparison.Ordinal),
+    "YouTube script never seeks (any seek inside an ad is reported, and an early one stalls the ad for 10 s)");
+Check(ytScript.Contains("const AD_RATE = 2;", StringComparison.Ordinal),
+    "ad speed-up stays under the player's 2.5x media-time vs wall-clock check");
+Check(Injections.YouTube(false, "", false).Contains("const AD_SPEED_UP = false", StringComparison.Ordinal), "ad speed-up can be disabled");
+var blocker = new AdBlocker();
+blocker.LoadLines(["# comment", "", "doubleclick.net", " googlesyndication.com "]);
+Check(blocker.Count == 2, "blocklist lines: comments and blanks skipped, entries trimmed");
+Check(!blocker.ShouldBlock("https://static.doubleclick.net/instream/ad_status.js"),
+    "YouTube's ad_status.js bait passes (blocking it only reports Karu as an ad blocker)");
+Check(!blocker.ShouldBlock("https://googleads.g.doubleclick.net/pagead/id?slf_rd=1"), "YouTube's pagead/id bait passes");
+Check(blocker.ShouldBlock("https://googleads.g.doubleclick.net/pagead/viewthroughconversion/1/?x=1"),
+    "other doubleclick paths on the bait host stay blocked");
+Check(blocker.ShouldBlock("https://static.doubleclick.net/instream/ad_status.js.evil"), "bait exemption is an exact path");
+Check(blocker.ShouldBlock("https://ad.doubleclick.net/instream/ad_status.js"), "bait exemption is tied to its host");
+Check(blocker.ShouldBlock("https://tpc.googlesyndication.com/sodar/x.js"), "subdomain of a listed domain is blocked");
+Check(!blocker.ShouldBlock("https://www.youtube.com/watch?v=x"), "unlisted host passes");
 var adDefaults = new AppSettings();
 adDefaults.Normalize();
-Check(adDefaults.YouTubeAdSeek, "ad seek on by default");
+Check(adDefaults.YouTubeAdSpeedUp, "ad speed-up on by default");
 
 Equal("mailto:a@b.example", UrlUtil.Normalize("mailto:a@b.example"), "mailto passes through to the mail client");
 Check(UrlUtil.Normalize("ftp://x.example/z").Contains("google.com/search", StringComparison.Ordinal),

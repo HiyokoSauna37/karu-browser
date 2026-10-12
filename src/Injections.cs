@@ -347,15 +347,18 @@ static class Injections
     ///     ボタンの座標だけをホストへ送り、ホストが CDP(Input.dispatchMouseEvent)で本物の入力を打つ
     ///     (<see cref="YouTubeAdSkip"/>)。
     ///   - サイズ0・opacity 0 のおとり .ytp-ad-skip-button が置かれ、押すと記録される。可視判定は必須。
-    ///   - 広告中の seeking は無条件に検知として報告される("a.s_")。末尾シークは即効だが記録は残るので、
-    ///     adSeek=false で止められる(その場合はミュートしてスキップボタンの出現を待つ)。
+    ///   - 広告中の seeking は無条件に検知として報告される("a.s_")。しかも再生が始まる前に末尾へ飛ぶと、
+    ///     広告の読み込みタイムアウト(10秒)が切れるまで本編へ進まない(2026-10-12 実測: 10本中5本が10秒超)。
+    ///     だからシークはしない。
+    ///   - 広告の再生位置が実時間の2.5倍より速く進むと検知として報告され("n.k_")、プリロールでは
+    ///     onAbnormalityDetected まで発火する。早送りはその手前の2倍に留める(adSpeedUp=false なら等速)。
     /// </summary>
-    public static string YouTube(bool focusMode, string maxQuality, bool adSeek) => $$"""
+    public static string YouTube(bool focusMode, string maxQuality, bool adSpeedUp) => $$"""
 (() => {
   if (!/(^|\.)youtube\.com$/.test(location.hostname)) return;
   window.__karuFocus = {{JsBool(focusMode)}};
   window.__karuMaxQ = {{System.Text.Json.JsonSerializer.Serialize(maxQuality)}};
-  const AD_SEEK = {{JsBool(adSeek)}};
+  const AD_SPEED_UP = {{JsBool(adSpeedUp)}};
 
   const HIDE = [
     '#secondary', '#related', 'ytd-watch-next-secondary-results-renderer',
@@ -463,37 +466,42 @@ static class Injections
     }
     return null;
   };
-  // 広告1本ぶんの状態。contentDur は広告でない間の video.duration。広告中の duration がこれ以上なら
-  // タイムラインが本編と共有されている(サーバー側で縫い込まれた広告)ので、末尾へ飛ぶと本編ごと終わる
-  const ad = { on: false, muted: false, clicks: 0, lastClick: 0, contentDur: NaN };
+  // 広告中の再生速度。2.5倍を超えると検知されるので2倍で止める(上の注記参照)
+  const AD_RATE = 2;
+  // 広告の状態。key は今流れている広告メディア(src と長さ)で、連続広告では1本ごとにクリック回数を数え直す。
+  // contentRate は広告でない間の再生速度で、広告用に上げた速度を本編へ持ち越さないよう終了時に戻す
+  const ad = { on: false, muted: false, sped: false, clicks: 0, lastClick: 0, key: '', contentRate: 1 };
+  // 本編のプレーヤー。トップページでは masthead 広告用の .html5-video-player が先に並ぶので id で取る
+  const mainPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
   const adTick = () => {
-    const p = document.querySelector('.html5-video-player');
+    const p = mainPlayer();
     const v = p && p.querySelector('video');
     const showing = !!p && (p.classList.contains('ad-showing') || p.classList.contains('ad-interrupting'));
     if (!showing) {
       if (ad.on) {
         ad.on = false;
-        // 自分で掛けたミュートだけ戻す(広告前からのミュート/プレーヤー自身のミュートは触らない)。
-        // 終了直後の tick は media 切替中で duration が広告のままのことがあるので contentDur は更新しない
+        // 自分で掛けたミュートだけ戻す(広告前からのミュート/プレーヤー自身のミュートは触らない)
         if (ad.muted && v && v.muted) {
-          const mp = document.getElementById('movie_player');
-          let pm = false; try { pm = !!(mp && mp.isMuted && mp.isMuted()); } catch (e) {}
+          let pm = false; try { pm = !!(p.isMuted && p.isMuted()); } catch (e) {}
           if (!pm) v.muted = false;
         }
-        ad.muted = false;
+        // 広告用の速度が残っていれば広告前の速度へ戻す。プレーヤーが本編の速度を入れ直していれば触らない。
+        // 終了直後の tick はメディア切替中のことがあるので contentRate はここでは取り直さない
+        if (ad.sped && v && v.playbackRate === AD_RATE) v.playbackRate = ad.contentRate;
+        ad.muted = ad.sped = false;
         return;
       }
-      if (v && isFinite(v.duration) && v.duration > 0) ad.contentDur = v.duration;
+      if (v) ad.contentRate = v.playbackRate;
       return;
     }
-    if (!ad.on) { ad.on = true; ad.clicks = 0; ad.lastClick = 0; }
+    if (!ad.on) { ad.on = true; ad.key = ''; }
     if (v) {
+      const key = v.src + '|' + v.duration;
+      if (key !== ad.key) { ad.key = key; ad.clicks = 0; ad.lastClick = 0; }
       if (!v.muted) { v.muted = true; ad.muted = true; }
-      const d = v.duration;
-      const shared = isFinite(ad.contentDur) && d >= ad.contentDur - 1;
-      if (AD_SEEK && isFinite(d) && d > 0 && d < 1200 && !shared && v.currentTime < d - 0.3) v.currentTime = d;
+      if (AD_SPEED_UP && v.playbackRate !== AD_RATE) { v.playbackRate = AD_RATE; ad.sped = true; }
     }
-    // スキップボタンが見えたらホストに本物のクリックを頼む(1広告あたり最大8回・0.7秒間隔)
+    // スキップボタンが見えたらホストに本物のクリックを頼む(広告1本あたり最大8回・0.7秒間隔)
     const s = visibleSkip(p);
     const now = Date.now();
     if (s && ad.clicks < 8 && now - ad.lastClick > 700) {

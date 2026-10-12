@@ -336,7 +336,7 @@ public partial class MainWindow : Window
             scripts.Add(Injections.TwitchQuality);
         if (_settings.TwitchAdBlock)
             scripts.Add(Injections.TwitchAdCover);
-        scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality, _settings.YouTubeAdSeek));
+        scripts.Add(Injections.YouTube(_settings.FocusMode, _settings.MaxQuality, _settings.YouTubeAdSpeedUp));
         scripts.Add(Injections.Vim);
         scripts.Add(Injections.PageCover);
         return scripts;
