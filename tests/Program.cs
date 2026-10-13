@@ -75,8 +75,18 @@ Check(!ytScript.Contains("currentTime =", StringComparison.Ordinal),
     "YouTube script never seeks (any seek inside an ad is reported, and an early one stalls the ad for 10 s)");
 Check(ytScript.Contains("const AD_RATE = 2.4, AD_LEAD = 0.3;", StringComparison.Ordinal),
     "ad speed-up stays under the player's 2.5x media-time vs wall-clock check, after a 1x lead-in");
-Check(!ytScript.Contains(".innerHTML", StringComparison.Ordinal),
-    "YouTube script never assigns innerHTML (YouTube enforces Trusted Types, so it would throw)");
+// YouTube などは Trusted Types を強制していて、HTML文字列を DOM へ入れる API は例外になる(実測)
+foreach (var (name, js) in new[]
+{
+    ("PageCover", Injections.PageCover), ("LowSpec", Injections.LowSpec), ("MediaPolicy", Injections.MediaPolicy(true, 30)),
+    ("TranslateState", Injections.TranslateState), ("TranslateCollect", Injections.TranslateCollect),
+    ("TranslateApplyFn", Injections.TranslateApplyFn), ("TranslateReapply", Injections.TranslateReapply),
+    ("TranslateRestore", Injections.TranslateRestore), ("TwitchQuality", Injections.TwitchQuality),
+    ("TwitchAdCover", Injections.TwitchAdCover), ("YouTube", ytScript), ("Vim", Injections.Vim),
+})
+    Check(!new[] { ".innerHTML", ".outerHTML", "insertAdjacentHTML", "document.write", "parseFromString", "createContextualFragment" }
+        .Any(sink => js.Contains(sink, StringComparison.Ordinal)),
+        name + " uses no HTML-string sink (Trusted Types sites such as YouTube throw on them)");
 Check(Injections.YouTube(false, "", false, true).Contains("const AD_SPEED_UP = false", StringComparison.Ordinal), "ad speed-up can be disabled");
 Check(Injections.YouTube(false, "", true, false).Contains("const AD_COVER = false", StringComparison.Ordinal), "ad cover can be disabled");
 var blocker = new AdBlocker();

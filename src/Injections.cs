@@ -38,20 +38,35 @@ static class Injections
     new PerformanceObserver(() => { lastBusy = performance.now(); })
       .observe({ type: 'longtask', buffered: true });
   } catch (e) {}
-  const FRAME1 =
-    '<svg class="k1" viewBox="0 0 200 200"><defs>' +
-    '<linearGradient id="k1o" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#B3401F"/><stop offset="55%" stop-color="#E8672E"/><stop offset="100%" stop-color="#F7A93C"/></linearGradient>' +
-    '<linearGradient id="k1i" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#F5952E"/><stop offset="100%" stop-color="#FFDD8A"/></linearGradient></defs>' +
-    '<g transform="translate(100,100) scale(1.385) translate(-101,-83)">' +
-    '<path fill="url(#k1o)" d="M100,14 C128,44 154,66 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,58 88,34 100,14 Z"/>' +
-    '<path fill="url(#k1i)" d="M101,72 C112,86 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,92 97,98 102,102 C103,90 100,82 101,72 Z"/></g></svg>';
-  const FRAME2 =
-    '<svg class="k2" viewBox="0 0 200 200"><defs>' +
-    '<linearGradient id="k2o" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#B3401F"/><stop offset="55%" stop-color="#E8672E"/><stop offset="100%" stop-color="#F7A93C"/></linearGradient>' +
-    '<linearGradient id="k2i" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#F5952E"/><stop offset="100%" stop-color="#FFDD8A"/></linearGradient></defs>' +
-    '<g transform="translate(100,100) scale(1.385) translate(-101,-83)">' +
-    '<path fill="url(#k2o)" d="M100,2 C126,36 154,60 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,50 88,22 100,2 Z"/>' +
-    '<path fill="url(#k2i)" d="M101,62 C110,78 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,86 97,90 102,94 C103,78 100,70 101,62 Z"/></g></svg>';
+  // 炎ロゴ(2コマ)。Trusted Types を強制するサイト(YouTube 等)では innerHTML への代入が例外になり、
+  // このスクリプトごと止まって被いもSPA遷移の検知も効かなくなる。HTML文字列は使わずDOM APIで組み立てる
+  const SVGNS = 'http://www.w3.org/2000/svg';
+  const svgEl = (tag, attrs, kids = []) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    e.append(...kids);
+    return e;
+  };
+  const grad = (id, stops) => svgEl('linearGradient', { id, x1: '0', y1: '1', x2: '0', y2: '0' },
+    stops.map(([offset, color]) => svgEl('stop', { offset, 'stop-color': color })));
+  const frame = (cls, outer, inner) => svgEl('svg', { class: cls, viewBox: '0 0 200 200' }, [
+    svgEl('defs', {}, [
+      grad(cls + 'o', [['0%', '#B3401F'], ['55%', '#E8672E'], ['100%', '#F7A93C']]),
+      grad(cls + 'i', [['0%', '#F5952E'], ['100%', '#FFDD8A']]),
+    ]),
+    svgEl('g', { transform: 'translate(100,100) scale(1.385) translate(-101,-83)' }, [
+      svgEl('path', { fill: 'url(#' + cls + 'o)', d: outer }),
+      svgEl('path', { fill: 'url(#' + cls + 'i)', d: inner }),
+    ]),
+  ]);
+  const flames = () => [
+    frame('k1',
+      'M100,14 C128,44 154,66 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,58 88,34 100,14 Z',
+      'M101,72 C112,86 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,92 97,98 102,102 C103,90 100,82 101,72 Z'),
+    frame('k2',
+      'M100,2 C126,36 154,60 154,104 C154,128 142,144 128,152 C134,138 132,120 118,108 C120,126 112,142 96,150 C70,146 48,126 48,100 C48,76 62,56 76,42 C72,58 74,74 86,84 C86,50 88,22 100,2 Z',
+      'M101,62 C110,78 122,98 121,116 C120,130 110,140 99,142 C88,140 78,129 78,115 C78,102 86,92 93,82 C94,86 97,90 102,94 C103,78 100,70 101,62 Z'),
+  ];
   const show = () => {
     if (!cover) {
       cover = document.createElement('div');
@@ -62,12 +77,15 @@ static class Injections
       cover.style.cssText = 'position:fixed;inset:0;z-index:2147483647;' +
         'background:rgba(17,17,17,.82);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);' +
         'display:flex;align-items:center;justify-content:center';
-      cover.innerHTML =
-        '<style>#__karuLoad svg{position:absolute;inset:0;width:88px;height:88px;' +
+      const css = document.createElement('style');
+      css.textContent = '#__karuLoad svg{position:absolute;inset:0;width:88px;height:88px;' +
         'animation:__karuFlick .36s steps(1) infinite!important}' +
         '#__karuLoad .k2{animation-delay:-.18s!important}' +
-        '@keyframes __karuFlick{0%,100%{opacity:1}50%{opacity:0}}</style>' +
-        '<div style="position:relative;width:88px;height:88px">' + FRAME1 + FRAME2 + '</div>';
+        '@keyframes __karuFlick{0%,100%{opacity:1}50%{opacity:0}}';
+      const box = document.createElement('div');
+      box.style.cssText = 'position:relative;width:88px;height:88px';
+      box.append(...flames());
+      cover.append(css, box);
     }
     // document-start時点では<html>(documentElement)がまだ無いことがある。そのままdocumentへ
     // appendするとカバー自体がドキュメント要素になり、本来のページ構築を壊して
@@ -158,7 +176,8 @@ static class Injections
     /// 位置が固定されるため)。そこで「葉ブロック」(ブロック子を持たない要素)ごとに、インライン子要素を
     /// {0} のようなトークンに置換した文字列を丸ごと翻訳する。gtx はこのトークンを保持したまま正しい語順へ
     /// 再配置するので、訳文中のトークン位置へ元の要素(リンク等)を戻せば整合する。トグル/復元は
-    /// 葉ブロックの innerHTML スナップショット(原文/訳文)を差し替えるだけ。
+    /// 葉ブロックの子ノードの控え(原文/訳文の複製)を差し替えるだけ。HTML文字列で控えて innerHTML へ
+    /// 書き戻す方式は、Trusted Types を強制するサイト(YouTube 等)で代入が例外になり切り替えられない。
     /// </summary>
 
     /// <summary>現在の翻訳状態を JSON で返す ({exists, shown, hasTranslated, changed})。
@@ -188,7 +207,7 @@ static class Injections
     }
   }
   const changed = (st.leafEls.length > 0 && live === 0) || covered * 3 < cur * 2;
-  return { exists: true, shown: st.shown, hasTranslated: Array.isArray(st.transHTML) && st.transHTML.length > 0, changed };
+  return { exists: true, shown: st.shown, hasTranslated: Array.isArray(st.transNodes) && st.transNodes.length > 0, changed };
 })()
 """;
 
@@ -233,7 +252,8 @@ static class Injections
     }
     units.push({ el, tmpl: tmpl.replace(/\s+/g, ' '), childElems });
   };
-  const origHTML = leafEls.map(el => el.innerHTML);
+  // 原文の控えは子ノードの複製で持つ(HTML文字列だと Trusted Types のサイトで書き戻せない)
+  const origNodes = leafEls.map(el => Array.from(el.childNodes, n => n.cloneNode(true)));
   for (const el of leafEls) makeUnit(el);
 
   // 葉ブロックに含まれない裸テキスト(混在コンテナ直下)は個別翻訳(orphan)にフォールバック
@@ -252,7 +272,7 @@ static class Injections
 
   // 世代番号: 翻訳 API 往復中の再収集・ページ遷移をまたいだ古い適用を ApplyFn 側で捨てるための印
   const gen = (window.__karuTransGen = (window.__karuTransGen || 0) + 1);
-  window.__karuTrans = { gen, units, leafEls, origHTML, transHTML: null, orphans, shown: 'original' };
+  window.__karuTrans = { gen, units, leafEls, origNodes, transNodes: null, orphans, shown: 'original' };
   // 平坦配列: ユニットの template → orphan のテキスト(順序は apply と合わせる)
   return { gen, segs: units.map(u => u.tmpl).concat(orphans.map(o => o.orig.trim())) };
 })()
@@ -260,7 +280,7 @@ static class Injections
 
     /// <summary>訳文配列(units → orphans の順)を適用して DOM を組み立てる関数式。
     /// gen は Collect が返した世代番号 — 翻訳 API 往復中に再収集・ページ遷移した場合の古い適用を捨てる。
-    /// final=true(最終適用)のときだけ訳文 HTML をキャッシュする(途中で失敗しても不完全な訳キャッシュが
+    /// final=true(最終適用)のときだけ訳文の控え(子ノードの複製)を取る(途中で失敗しても不完全な訳キャッシュが
     /// 残らず、次のトグルで翻訳し直せる)。切り離された要素への書き込みはスキップする。</summary>
     public const string TranslateApplyFn = """
 ((trans, gen, final) => {
@@ -304,30 +324,31 @@ static class Injections
       try { o.node.nodeValue = o.trans; } catch (e) {}
     }
   }
-  if (final) st.transHTML = leafEls.map(el => el.innerHTML);
+  if (final) st.transNodes = leafEls.map(el => Array.from(el.childNodes, n => n.cloneNode(true)));
   st.shown = 'translated';
   return units.length + orphans.length;
 })
 """;
 
-    /// <summary>キャッシュ済みの訳文へ戻す(ネットワーク不要。葉ブロックは innerHTML 差し替え)。</summary>
+    /// <summary>キャッシュ済みの訳文へ戻す(ネットワーク不要。葉ブロックは訳文の控えの複製に差し替え)。</summary>
     public const string TranslateReapply = """
 (() => {
   const st = window.__karuTrans;
-  if (!st || !st.transHTML) return 0;
-  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].innerHTML = st.transHTML[i]; } catch (e) {} }
+  if (!st || !st.transNodes) return 0;
+  // 控えは何度でも切り替えられるよう、毎回複製を差し込む
+  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].replaceChildren(...st.transNodes[i].map(n => n.cloneNode(true))); } catch (e) {} }
   for (const o of st.orphans) if (o.trans != null && o.node.isConnected) { try { o.node.nodeValue = o.trans; } catch (e) {} }
   st.shown = 'translated';
   return st.leafEls.length;
 })()
 """;
 
-    /// <summary>原文へ戻す(葉ブロックは原文 innerHTML を差し替え、orphan は原文 nodeValue に戻す)。</summary>
+    /// <summary>原文へ戻す(葉ブロックは原文の控えの複製に差し替え、orphan は原文 nodeValue に戻す)。</summary>
     public const string TranslateRestore = """
 (() => {
   const st = window.__karuTrans;
   if (!st) return 0;
-  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].innerHTML = st.origHTML[i]; } catch (e) {} }
+  for (let i = 0; i < st.leafEls.length; i++) if (st.leafEls[i].isConnected) { try { st.leafEls[i].replaceChildren(...st.origNodes[i].map(n => n.cloneNode(true))); } catch (e) {} }
   for (const o of st.orphans) if (o.node.isConnected) { try { o.node.nodeValue = o.orig; } catch (e) {} }
   st.shown = 'original';
   return st.leafEls.length;
