@@ -160,17 +160,13 @@ public partial class MainWindow
                 if (core is null) continue;   // 初期化中 or 破棄済み
                 if (core.IsDocumentPlayingAudio) continue; // BGM再生中のタブは絶対に触らない
 
-                double idleSec = (now - t.HiddenAt).TotalSeconds;
-                double hibernateAfter = pressure ? 30
-                    : i < _settings.WarmTabs ? _settings.HibernateWarmMinutes * 60
-                    : _settings.HibernateColdSeconds;
-
-                if (idleSec >= hibernateAfter)
+                var action = TabLifecyclePolicy.ForInactiveTab(now - t.HiddenAt, i, pressure, _settings);
+                if (action == TabLifecyclePolicy.Action.Hibernate)
                 {
                     if (!core.IsSuspended) await CaptureVideoPosAsync(t); // サスペンド済みなら記録済み
                     HibernateTab(t);
                 }
-                else if (!core.IsSuspended && idleSec >= 15)
+                else if (action == TabLifecyclePolicy.Action.Suspend && !core.IsSuspended)
                 {
                     await CaptureVideoPosAsync(t); // 休眠に備えて動画位置を先に記録
                     try { await core.TrySuspendAsync(); } catch { }
@@ -180,14 +176,14 @@ public partial class MainWindow
             // 最小化中のアクティブタブはサスペンドまで (復帰の速さを優先して休眠はしない)
             if (minimized && _active?.View?.CoreWebView2 is { } ac
                 && !ac.IsSuspended && !ac.IsDocumentPlayingAudio
-                && (now - _minimizedAt).TotalSeconds >= 15)
+                && TabLifecyclePolicy.ShouldSuspendActiveTab(now - _minimizedAt))
             {
                 await CaptureVideoPosAsync(_active);
                 try { await ac.TrySuspendAsync(); } catch { }
             }
 
             // パーキングモード: 最小化が続いたらアクティブ含め全タブ休眠 (音声再生中は除外)
-            if (minimized && (now - _minimizedAt).TotalMinutes >= _settings.ParkMinutes)
+            if (minimized && TabLifecyclePolicy.ShouldPark(now - _minimizedAt, _settings))
             {
                 bool hibernated = false;
                 foreach (var t in Tabs.ToList())

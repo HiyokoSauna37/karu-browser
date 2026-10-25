@@ -69,6 +69,9 @@ Check(clickSeq.All(j => j.Contains("\"button\":\"left\"") && j.Contains("\"click
     && j.Contains("\"x\":10") && j.Contains("\"y\":20")), "trusted click is a left single click at the point");
 var ytScript = Injections.YouTube(false, "", true, true);
 Check(ytScript.Contains(Injections.MessageToken, StringComparison.Ordinal), "YouTube script carries the message token");
+Check(Injections.MessageToken.Length == 32 && Injections.Vim.Contains(Injections.MessageToken, StringComparison.Ordinal),
+    "Vim script carries the initialized message token across partial class files");
+Check(!Injections.Vim.Contains("__KARU_MSG_TOKEN__", StringComparison.Ordinal), "Vim message token placeholder replaced");
 Check(ytScript.Contains("adSkip|", StringComparison.Ordinal), "YouTube script asks the host for the skip click");
 Check(!ytScript.Contains(".click()", StringComparison.Ordinal), "YouTube script never clicks ad controls synthetically");
 Check(!ytScript.Contains("currentTime =", StringComparison.Ordinal),
@@ -153,6 +156,35 @@ Check(invalidSettings.MaxFps == 0, "MaxFps clamped");
 Check(invalidSettings.WarmTabs == 0, "WarmTabs clamped");
 Check(invalidSettings.HibernateColdSeconds == 15, "hibernate seconds clamped");
 Check(invalidSettings.PressureAvailableGB == 1.5, "NaN memory threshold repaired");
+
+var lifecycle = new AppSettings
+{
+    WarmTabs = 2,
+    HibernateWarmMinutes = 10,
+    HibernateColdSeconds = 180,
+    ParkMinutes = 10,
+};
+lifecycle.Normalize();
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(14), 2, false, lifecycle) ==
+      TabLifecyclePolicy.Action.None, "fresh background tab stays idle");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(15), 2, false, lifecycle) ==
+      TabLifecyclePolicy.Action.Suspend, "background tab suspends at 15 seconds");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(180), 2, false, lifecycle) ==
+      TabLifecyclePolicy.Action.Hibernate, "cold tab hibernates at configured threshold");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(180), 1, false, lifecycle) ==
+      TabLifecyclePolicy.Action.Suspend, "warm tab keeps its longer hibernation threshold");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromMinutes(10), 1, false, lifecycle) ==
+      TabLifecyclePolicy.Action.Hibernate, "warm tab hibernates at configured threshold");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(29), 0, true, lifecycle) ==
+      TabLifecyclePolicy.Action.Suspend, "memory pressure does not hibernate before 30 seconds");
+Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(30), 0, true, lifecycle) ==
+      TabLifecyclePolicy.Action.Hibernate, "memory pressure overrides warm-tab retention");
+Check(!TabLifecyclePolicy.ShouldSuspendActiveTab(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1)) &&
+      TabLifecyclePolicy.ShouldSuspendActiveTab(TimeSpan.FromSeconds(15)),
+    "minimized active tab suspends at 15 seconds");
+Check(!TabLifecyclePolicy.ShouldPark(TimeSpan.FromMinutes(10) - TimeSpan.FromTicks(1), lifecycle) &&
+      TabLifecyclePolicy.ShouldPark(TimeSpan.FromMinutes(10), lifecycle),
+    "window parks at configured threshold");
 
 if (failures.Count > 0)
 {
