@@ -12,6 +12,7 @@ internal static class TabLifecyclePolicy
 
     static readonly TimeSpan SuspendAfter = TimeSpan.FromSeconds(15);
     static readonly TimeSpan PressureHibernateAfter = TimeSpan.FromSeconds(30);
+    static readonly TimeSpan CapacityHibernateAfter = TimeSpan.FromSeconds(60);
 
     public static Action ForInactiveTab(
         TimeSpan idle,
@@ -32,6 +33,14 @@ internal static class TabLifecyclePolicy
 
     public static bool ShouldSuspendActiveTab(TimeSpan minimizedFor)
         => minimizedFor >= SuspendAfter;
+
+    /// <summary>上限超過分は、変更中の状態を急に失わないよう60秒待ち、
+    /// WebView2が安全に停止できたタブだけを休眠させる。</summary>
+    public static bool ShouldHibernateForCapacity(TimeSpan idle, bool isSuspended)
+        => isSuspended && idle >= CapacityHibernateAfter;
+
+    public static bool IsOverLiveLimit(int retainedLiveTabs, AppSettings settings)
+        => settings.MaxLiveTabs > 0 && retainedLiveTabs >= settings.MaxLiveTabs;
 
     public static bool ShouldPark(TimeSpan minimizedFor, AppSettings settings)
         => minimizedFor >= TimeSpan.FromMinutes(settings.ParkMinutes);

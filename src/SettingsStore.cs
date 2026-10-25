@@ -32,6 +32,9 @@ public class AppSettings
     public bool EnableBrowserProtections { get; set; } = true;
 
     // ---- タブ休眠(ハイバネート)ポリシー (settings.json で調整可能) ----
+    /// <summary>同時にWebViewを保持するタブ数のソフト上限(active込み)。0で無制限。
+    /// 超過分は非表示60秒以上かつサスペンド済みの場合だけ休眠する。</summary>
+    public int MaxLiveTabs { get; set; } = 6;
     /// <summary>アクティブ以外に「温存」する直近使用タブの数</summary>
     public int WarmTabs { get; set; } = 2;
     /// <summary>温存タブを休眠させるまでの分数</summary>
@@ -48,6 +51,7 @@ public class AppSettings
         string[] qualities = ["", "tiny", "small", "medium", "large", "hd720", "hd1080", "hd1440", "hd2160"];
         if (!qualities.Contains(MaxQuality, StringComparer.Ordinal)) MaxQuality = "hd1080";
         MaxFps = Math.Clamp(MaxFps, 0, 240);
+        MaxLiveTabs = Math.Clamp(MaxLiveTabs, 0, 100);
         WarmTabs = Math.Clamp(WarmTabs, 0, 50);
         HibernateWarmMinutes = Math.Clamp(HibernateWarmMinutes, 1, 24 * 60);
         HibernateColdSeconds = Math.Clamp(HibernateColdSeconds, 15, 24 * 60 * 60);

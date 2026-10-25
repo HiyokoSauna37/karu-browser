@@ -187,6 +187,11 @@ static partial class Injections
   };
   // 本編のプレーヤー。トップページでは masthead 広告用の .html5-video-player が先に並ぶので id で取る
   const mainPlayer = () => document.getElementById('movie_player') || document.querySelector('.html5-video-player');
+  let adPollId = 0;
+  const syncAdPolling = () => {
+    if (ad.on && !adPollId) adPollId = setInterval(adTick, 100);
+    else if (!ad.on && adPollId) { clearInterval(adPollId); adPollId = 0; }
+  };
   const adTick = () => {
     const p = mainPlayer();
     const v = p && p.querySelector('video');
@@ -205,6 +210,7 @@ static partial class Injections
         ad.muted = ad.sped = false;
         hideCover();
         cover.off = false;
+        syncAdPolling();
         return;
       }
       if (v) ad.contentRate = v.playbackRate;
@@ -233,6 +239,7 @@ static partial class Injections
       passCover(1500);
       send('adSkip|' + s.x + '|' + s.y);
     }
+    syncAdPolling();
   };
   // 広告の始まりはプレーヤーの class の変化で即座に拾い(被いと消音を最初から効かせる)、広告中は0.1秒ごとに
   // 見直す(スキップボタンが出た瞬間に押し、等速区間の終わりですぐ速度を上げる)。広告が無い間は下の0.5秒ループだけ
@@ -245,8 +252,6 @@ static partial class Injections
     classWatch.observe(p, { attributes: true, attributeFilter: ['class'] });
     watched = p;
   };
-  setInterval(() => { if (ad.on) adTick(); }, 100);
-
   let hid = false; // 集中モードで実際に要素を隠しているか（無駄な復元走査を避ける）
   setInterval(() => {
     // --- 広告スキップ (バックグラウンド音声再生中も動かす) ---
@@ -273,13 +278,16 @@ static partial class Injections
       // (集中モードOFFに戻してもチャットは再読み込みまで復活しない点は許容)
       const chat = document.querySelector('iframe#chatframe');
       if (chat) chat.remove();
-      for (const sel of HIDE)
-        for (const el of document.querySelectorAll(sel))
-          if (el.dataset.karuHidden !== '1') {
+      // 新しく追加される要素は上のCSSで隠れる。direct styleの全DOM走査は
+      // 集中モードに入った最初の1回だけ行い、0.5秒ごとの12 selector走査を避ける。
+      if (!hid) {
+        for (const sel of HIDE)
+          for (const el of document.querySelectorAll(sel)) {
             el.dataset.karuHidden = '1';
             el.style.setProperty('display', 'none', 'important');
           }
-      hid = true;
+        hid = true;
+      }
     } else if (hid) {
       for (const el of document.querySelectorAll('[data-karu-hidden="1"]')) {
         el.style.removeProperty('display');

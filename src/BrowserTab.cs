@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Windows.Media;
 using Microsoft.Web.WebView2.Wpf;
 
 namespace Karu;
@@ -8,7 +7,7 @@ namespace Karu;
 /// <summary>
 /// タブ1つぶんの状態。メモリライフサイクルは3段階:
 ///   Active(表示中) → Suspended(WebView2のTrySuspend) → Hibernated(WebView破棄・URLと再生位置のみ保持)
-/// 休眠中は View が null になり、タブUI(タイトル/favicon)だけが残る。
+/// 休眠中は View が null になり、タブUI(タイトル)だけが残る。
 /// </summary>
 public class BrowserTab : INotifyPropertyChanged
 {
@@ -38,16 +37,14 @@ public class BrowserTab : INotifyPropertyChanged
     /// 化けるか取れなくなる(実測)ため、休眠とセッション保存はこれへ落ちる。</summary>
     public string? LastUrl;
 
-    /// <summary>休眠中かどうか。タブUIの表示(半透明化)にもバインドされる。</summary>
-    public bool IsAsleep => View is null;
-
     /// <summary>WebViewを手放して休眠状態に入る (Dispose は呼び出し側で済ませること)。</summary>
     public void Detach(string? url, double videoPos)
     {
         View = null;
         SleepUrl = url;
         SleepVideoPos = videoPos;
-        OnChanged(nameof(IsAsleep));
+        Interlocked.Increment(ref _viewGeneration);
+        Interlocked.Exchange(ref _activeDownloads, 0);
     }
 
     /// <summary>新しいWebViewを割り当てる(新規タブの初回装着と休眠からの復帰)。</summary>
@@ -57,7 +54,8 @@ public class BrowserTab : INotifyPropertyChanged
         SleepUrl = null;
         SleepVideoPos = 0;
         LastVideoPos = 0;
-        OnChanged(nameof(IsAsleep));
+        Interlocked.Increment(ref _viewGeneration);
+        Interlocked.Exchange(ref _activeDownloads, 0);
     }
 
     string _title = "新しいタブ";
@@ -67,22 +65,31 @@ public class BrowserTab : INotifyPropertyChanged
         set { if (_title != value) { _title = value; OnChanged(); } }
     }
 
-    ImageSource? _favicon;
-    public ImageSource? Favicon
-    {
-        get => _favicon;
-        set { if (!Equals(_favicon, value)) { _favicon = value; OnChanged(); } }
-    }
-
-    bool _isActive;
-    public bool IsActive
-    {
-        get => _isActive;
-        set { if (_isActive != value) { _isActive = value; OnChanged(); } }
-    }
-
     /// <summary>ナビゲーション中かどうか (NavigationStarting〜Completed)。タイトルバーの炎表示に使う。</summary>
     public bool IsLoading;
+
+    int _activeDownloads;
+    long _viewGeneration;
+    /// <summary>進行中ダウンロードの間はWebViewの自動休眠を禁止する。</summary>
+    internal bool HasActiveDownloads => Volatile.Read(ref _activeDownloads) > 0;
+    internal long BeginDownload()
+    {
+        long generation = Volatile.Read(ref _viewGeneration);
+        Interlocked.Increment(ref _activeDownloads);
+        return generation;
+    }
+    internal void EndDownload(long generation)
+    {
+        while (true)
+        {
+            // 破棄済みの旧WebViewから遅れて届いた完了通知で、
+            // 復帰後の新しいWebViewのダウンロード数を減らさない。
+            if (Volatile.Read(ref _viewGeneration) != generation) return;
+            int current = Volatile.Read(ref _activeDownloads);
+            if (current == 0) return;
+            if (Interlocked.CompareExchange(ref _activeDownloads, current - 1, current) == current) return;
+        }
+    }
 
     public event PropertyChangedEventHandler? PropertyChanged;
     void OnChanged([CallerMemberName] string? name = null)

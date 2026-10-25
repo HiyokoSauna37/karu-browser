@@ -11,7 +11,7 @@ namespace Karu;
 /// タブの切替・破棄・ナビゲーションと3段階メモリライフサイクルの管理。
 ///   1. Active    : 表示中。フルメモリ。
 ///   2. Suspended : 非表示15秒。WebView2のTrySuspendでレンダラーのメモリを解放。
-///   3. Hibernated: 非表示が続いたタブ。WebViewを完全破棄し、URL・タイトル・favicon・動画位置のみ保持(数百バイト)。
+///   3. Hibernated: 非表示が続いたタブ。WebViewを完全破棄し、URL・タイトル・動画位置のみ保持(数百バイト)。
 ///      復帰時はWebViewを再生成して動画位置へ自動シーク。
 /// さらに空き物理メモリが閾値を切ると全非表示タブを緊急休眠する。
 /// </summary>
@@ -73,7 +73,6 @@ public partial class MainWindow
         if (tab.View is null) _ = WakeTabAsync(tab); // 休眠から復帰 (View自体は同期的に生成される)
         foreach (var t in Tabs)
         {
-            t.IsActive = t == tab;
             if (t.View is not null)
                 t.View.Visibility = t == tab ? Visibility.Visible : Visibility.Hidden;
         }
@@ -149,18 +148,28 @@ public partial class MainWindow
             bool pressure = SystemMemory.AvailableGB() < _settings.PressureAvailableGB;
             var now = DateTime.Now;
 
-            // 直近に使った順。上位 WarmTabs 個は「温存」枠として休眠を遅らせる
-            var hidden = Tabs.Where(t => t != _active).OrderByDescending(t => t.HiddenAt).ToList();
+            // 直近に使った順。休眠済みタブは WarmTabs と live上限の順位を消費しない。
+            var hidden = Tabs.Where(t => t != _active && t.View is not null)
+                .OrderByDescending(t => t.HiddenAt).ToList();
+            int keptLive = _active?.View is null ? 0 : 1;
             for (int i = 0; i < hidden.Count; i++)
             {
                 var t = hidden[i];
-                if (t.View is null) continue; // 休眠済み
                 CoreWebView2? core = null;
-                try { core = t.View.CoreWebView2; } catch { } // ループ中のawaitの間に閉じられた
-                if (core is null) continue;   // 初期化中 or 破棄済み
-                if (core.IsDocumentPlayingAudio) continue; // BGM再生中のタブは絶対に触らない
+                try { core = t.View!.CoreWebView2; } catch { } // ループ中のawaitの間に閉じられた
+                if (core is null) { keptLive++; continue; } // 初期化中のWebViewもlive枠に数える
+                // ユーザー操作の結果が進行中のタブは自動休眠させない。
+                if (core.IsDocumentPlayingAudio || t.IsLoading || t.HasActiveDownloads || _translating.Contains(t))
+                {
+                    keptLive++;
+                    continue;
+                }
 
-                var action = TabLifecyclePolicy.ForInactiveTab(now - t.HiddenAt, i, pressure, _settings);
+                var idle = now - t.HiddenAt;
+                bool overLiveLimit = TabLifecyclePolicy.IsOverLiveLimit(keptLive, _settings);
+                var action = overLiveLimit && TabLifecyclePolicy.ShouldHibernateForCapacity(idle, core.IsSuspended)
+                    ? TabLifecyclePolicy.Action.Hibernate
+                    : TabLifecyclePolicy.ForInactiveTab(idle, i, pressure, _settings);
                 if (action == TabLifecyclePolicy.Action.Hibernate)
                 {
                     if (!core.IsSuspended) await CaptureVideoPosAsync(t); // サスペンド済みなら記録済み
@@ -171,11 +180,13 @@ public partial class MainWindow
                     await CaptureVideoPosAsync(t); // 休眠に備えて動画位置を先に記録
                     try { await core.TrySuspendAsync(); } catch { }
                 }
+                if (t.View is not null) keptLive++; // 休眠で破棄したタブは枠を消費しない
             }
 
             // 最小化中のアクティブタブはサスペンドまで (復帰の速さを優先して休眠はしない)
             if (minimized && _active?.View?.CoreWebView2 is { } ac
                 && !ac.IsSuspended && !ac.IsDocumentPlayingAudio
+                && !_active.IsLoading && !_active.HasActiveDownloads && !_translating.Contains(_active)
                 && TabLifecyclePolicy.ShouldSuspendActiveTab(now - _minimizedAt))
             {
                 await CaptureVideoPosAsync(_active);
@@ -190,7 +201,8 @@ public partial class MainWindow
                 {
                     CoreWebView2? c = null;
                     try { c = t.View?.CoreWebView2; } catch { }
-                    if (c is null || c.IsDocumentPlayingAudio) continue;
+                    if (c is null || c.IsDocumentPlayingAudio || t.IsLoading || t.HasActiveDownloads || _translating.Contains(t))
+                        continue;
                     if (!c.IsSuspended) await CaptureVideoPosAsync(t);
                     HibernateTab(t, allowActive: true);
                     hibernated = true;

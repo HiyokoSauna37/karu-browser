@@ -17,15 +17,21 @@ static partial class Injections
     /// </summary>
     public const string PageCover = """
 (() => {
+  // AddScriptToExecuteOnDocumentCreated は子フレームにも入る。画面全体の被いは最上位ページだけで十分。
+  if (self !== top) return;
   // 内部生成ページ(スタートページ/mpvプレースホルダー=NavigateToString)は一瞬で描画されるので出さない
   if (location.href === 'about:blank' || location.protocol === 'data:') return;
   const QUIET = 250, MAX = 8000;
-  let lastBusy = 0, gen = 0, cover = null, pollId = 0;
-  // 50ms超の主スレッド占有(long task)を「まだ操作できない」のシグナルとして使う
-  try {
-    new PerformanceObserver(() => { lastBusy = performance.now(); })
-      .observe({ type: 'longtask', buffered: true });
-  } catch (e) {}
+  let lastBusy = 0, gen = 0, cover = null, pollId = 0, busyObserver = null;
+  // 50ms超の主スレッド占有(long task)を「まだ操作できない」のシグナルとして使う。
+  // 被いを外した後は監視を止め、通常閲覧中のコールバックとentry生成を避ける。
+  const observeBusy = () => {
+    try {
+      busyObserver ??= new PerformanceObserver(() => { lastBusy = performance.now(); });
+      busyObserver.observe({ type: 'longtask', buffered: true });
+    } catch (e) {}
+  };
+  const stopObservingBusy = () => { try { busyObserver?.disconnect(); } catch (e) {} };
   // 炎ロゴ(2コマ)。Trusted Types を強制するサイト(YouTube 等)では innerHTML への代入が例外になり、
   // このスクリプトごと止まって被いもSPA遷移の検知も効かなくなる。HTML文字列は使わずDOM APIで組み立てる
   const SVGNS = 'http://www.w3.org/2000/svg';
@@ -81,7 +87,10 @@ static partial class Injections
     if (!cover.parentNode && document.documentElement)
       document.documentElement.appendChild(cover);
   };
-  const hide = () => { if (cover) { cover.remove(); cover = null; } };
+  const hide = () => {
+    stopObservingBusy();
+    if (cover) { cover.remove(); cover = null; }
+  };
   const poll = (myGen, started) => {
     if (myGen !== gen) return;
     show(); // documentElementが遅れて現れたページでもここでマウントされる
@@ -93,6 +102,7 @@ static partial class Injections
   const begin = resetBusy => {
     gen++;
     if (resetBusy) lastBusy = performance.now(); // SPA遷移はクリック時点から計測をやり直す
+    observeBusy();
     show();
     clearTimeout(pollId);
     poll(gen, performance.now());
@@ -112,7 +122,11 @@ static partial class Injections
     clearTimeout(pollId);
     setTimeout(() => hide(), 8000);
   });
-  window.__karuCoverHide = () => hide(); // ホストがナビゲーション失敗時に呼ぶ
+  window.__karuCoverHide = () => {
+    gen++;
+    clearTimeout(pollId);
+    hide();
+  }; // ホストがナビゲーション失敗時に呼ぶ
 
   // ---- SPA(pushState/replaceState/popstate)遷移。URLが実際に変わった時だけ被いを出し直す ----
   let lastHref = location.href;

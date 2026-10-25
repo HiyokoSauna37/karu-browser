@@ -33,38 +33,19 @@ static class Translator
     // 訳文のプロセス全域メモ(LRU)。キーは "from\nto\n原文(trim済)"。
     // サイト内はヘッダ/メニュー等の同一文言がページをまたいで繰り返されるため、
     // ページ遷移を重ねても差分だけ gtx を叩く(無料エンドポイントのレート制限対策を兼ねる)。
-    const int MemoCap = 10_000;
-    static readonly object MemoLock = new();
-    static readonly Dictionary<string, LinkedListNode<(string Key, string T, string? D)>> Memo = new();
-    static readonly LinkedList<(string Key, string T, string? D)> MemoOrder = new();
+    // 長文は1件で数千文字になるので、件数に加えキー+訳文の合計400万文字でも抑える。
+    static readonly TranslationMemo Memo = new(entryCap: 10_000, characterCap: 4_000_000);
 
     static string MemoKey(string from, string to, string text) => $"{from}\n{to}\n{text}";
 
     static (string T, string? D)? MemoGet(string key)
     {
-        lock (MemoLock)
-        {
-            if (!Memo.TryGetValue(key, out var node)) return null;
-            MemoOrder.Remove(node); // LRU: 触れたエントリを末尾へ回す
-            MemoOrder.AddLast(node);
-            return (node.Value.T, node.Value.D);
-        }
+        var hit = Memo.Get(key);
+        return hit is { } value ? (value.Translation, value.Detected) : null;
     }
 
     static void MemoSet(string key, string t, string? d)
-    {
-        lock (MemoLock)
-        {
-            if (Memo.TryGetValue(key, out var old)) MemoOrder.Remove(old);
-            Memo[key] = MemoOrder.AddLast((key, t, d));
-            if (Memo.Count > MemoCap)
-            {
-                var oldest = MemoOrder.First!;
-                MemoOrder.RemoveFirst();
-                Memo.Remove(oldest.Value.Key);
-            }
-        }
-    }
+        => Memo.Set(key, t, d);
 
     /// <summary>
     /// 複数セグメントをまとめて翻訳し、入力と 1:1 に対応する訳文配列を返す。

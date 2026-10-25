@@ -202,8 +202,9 @@ static partial class Injections
   };
 
   // 直近のマウス位置。ホイールと同じ感覚で、乗せている領域 (Twitchのチャット等) を優先する
-  let mouse = null, cached = null, cachedAxis = 0;
-  addEventListener('mousemove', e => { mouse = [e.clientX, e.clientY]; cached = null; },
+  // mousemoveは高頻度なので、毎回座標配列を割り当てずscalarを書き換える。
+  let hasMouse = false, mouseX = 0, mouseY = 0, cached = null, cachedAxis = 0;
+  addEventListener('mousemove', e => { hasMouse = true; mouseX = e.clientX; mouseY = e.clientY; cached = null; },
     { capture: true, passive: true });
 
   const scroller = (dx, dy) => {
@@ -216,7 +217,7 @@ static partial class Injections
       el = r; // 普通のページスクロールが使えるならそれが最優先
     } else {
       const alt = { el: null }, seeds = [];
-      if (mouse) seeds.push(document.elementFromPoint(mouse[0], mouse[1]));
+      if (hasMouse) seeds.push(document.elementFromPoint(mouseX, mouseY));
       if (document.activeElement && document.activeElement !== document.body) seeds.push(document.activeElement);
       seeds.push(document.elementFromPoint(innerWidth / 2, innerHeight / 2));
       for (const s of seeds) { if (s && (el = fromChain(s, dx, dy, alt))) break; }

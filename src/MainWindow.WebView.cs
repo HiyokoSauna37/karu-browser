@@ -141,7 +141,7 @@ public partial class MainWindow
         return scripts;
     }
 
-    /// <summary>タブの表示状態(タイトル/favicon/読み込み中/全画面)とページからのコマンドをホストへ配線する。</summary>
+    /// <summary>タブの表示状態(タイトル/読み込み中/全画面)とページからのコマンドをホストへ配線する。</summary>
     void WireTabEvents(BrowserTab tab, CoreWebView2 core)
     {
         core.DocumentTitleChanged += (_, _) =>
@@ -149,24 +149,37 @@ public partial class MainWindow
             tab.Title = string.IsNullOrWhiteSpace(core.DocumentTitle) ? "新しいタブ" : core.DocumentTitle;
             if (tab == _active) UpdateWindowTitle();
         };
-        core.FaviconChanged += async (_, _) =>
-        {
-            try
-            {
-                using var src = await core.GetFaviconAsync(CoreWebView2FaviconImageFormat.Png);
-                if (src is null) { tab.Favicon = null; return; }
-                using var ms = new MemoryStream();
-                await src.CopyToAsync(ms);
-                if (ms.Length == 0) { tab.Favicon = null; return; }
-                ms.Position = 0;
-                tab.Favicon = DecodeBitmap(ms);
-            }
-            catch { tab.Favicon = null; }
-        };
         core.NewWindowRequested += async (_, args) =>
         {
             args.Handled = true;
             await AddTabAsync(args.Uri);
+        };
+        core.DownloadStarting += (_, args) =>
+        {
+            var download = args.DownloadOperation;
+            bool finished = false;
+            long generation = tab.BeginDownload();
+            void Finish()
+            {
+                if (finished) return;
+                finished = true;
+                try { download.StateChanged -= OnStateChanged; } catch { }
+                tab.EndDownload(generation);
+            }
+            void OnStateChanged(object? sender, object e)
+            {
+                if (finished) return;
+                try { if (download.State == CoreWebView2DownloadState.InProgress) return; }
+                catch { }
+                Finish();
+            }
+            try
+            {
+                download.StateChanged += OnStateChanged;
+                // 極短いダウンロードがハンドラ登録前に完了していた場合も回収する。
+                OnStateChanged(download, EventArgs.Empty);
+            }
+            catch { Finish(); }
         };
         // リンクをクリックした瞬間に炎を出して「処理はもう始まっている」ことを伝える。
         // 中央の半透明カバーはページのDOM内で完結する(PageCover):

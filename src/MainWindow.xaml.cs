@@ -34,8 +34,9 @@ public partial class MainWindow : Window
     DateTime _minimizedAt = DateTime.Now;
 
     // ナビゲーション中の炎アニメーション (2フレームを交互表示。クリック直後に「もう始まっている」を伝える)
-    static readonly BitmapImage FlameFrame1 = new(new Uri("pack://application:,,,/karu-flame1.png"));
-    static readonly BitmapImage FlameFrame2 = new(new Uri("pack://application:,,,/karu-flame2.png"));
+    // 表示は16 DIPのため、256px原画の展開は64pxまでにして400% DPIまで原寸を保つ。
+    static readonly BitmapImage FlameFrame1 = DecodeResourceBitmap("pack://application:,,,/karu-flame1.png", 64);
+    static readonly BitmapImage FlameFrame2 = DecodeResourceBitmap("pack://application:,,,/karu-flame2.png", 64);
     readonly DispatcherTimer _flameTimer = new() { Interval = TimeSpan.FromMilliseconds(180) };
     bool _flameToggle;
 
@@ -185,7 +186,7 @@ public partial class MainWindow : Window
     /// <summary>全タブの実URL(タブ順)。セッション保存と再起動の引き継ぎに使う。</summary>
     IEnumerable<string> ContentUrls() => Tabs.Select(ContentUrl).OfType<string>();
 
-    /// <summary>ストリームから即時デコードして凍結した画像を作る(favicon とオーバーレイ背景で共用)。</summary>
+    /// <summary>ストリームから即時デコードして凍結したオーバーレイ背景を作る。</summary>
     static BitmapImage DecodeBitmap(Stream stream, int decodePixelWidth = 0)
     {
         var img = new BitmapImage();
@@ -193,6 +194,19 @@ public partial class MainWindow : Window
         img.CacheOption = BitmapCacheOption.OnLoad;
         if (decodePixelWidth > 0) img.DecodePixelWidth = decodePixelWidth;
         img.StreamSource = stream;
+        img.EndInit();
+        img.Freeze();
+        return img;
+    }
+
+    /// <summary>パッケージ画像を表示サイズに合わせてデコードし、共有可能な不変画像にする。</summary>
+    static BitmapImage DecodeResourceBitmap(string uri, int decodePixelWidth)
+    {
+        var img = new BitmapImage();
+        img.BeginInit();
+        img.CacheOption = BitmapCacheOption.OnLoad;
+        img.DecodePixelWidth = decodePixelWidth;
+        img.UriSource = new Uri(uri, UriKind.Absolute);
         img.EndInit();
         img.Freeze();
         return img;

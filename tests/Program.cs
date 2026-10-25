@@ -78,6 +78,36 @@ Check(!ytScript.Contains("currentTime =", StringComparison.Ordinal),
     "YouTube script never seeks (any seek inside an ad is reported, and an early one stalls the ad for 10 s)");
 Check(ytScript.Contains("const AD_RATE = 2.4, AD_LEAD = 0.3;", StringComparison.Ordinal),
     "ad speed-up stays under the player's 2.5x media-time vs wall-clock check, after a 1x lead-in");
+Check(ytScript.Contains("adPollId = setInterval(adTick, 100)", StringComparison.Ordinal) &&
+      ytScript.Contains("clearInterval(adPollId)", StringComparison.Ordinal),
+    "YouTube 100 ms polling only runs while an ad is active");
+Check(!ytScript.Contains("setInterval(() => { if (ad.on) adTick(); }, 100)", StringComparison.Ordinal),
+    "YouTube has no permanent 100 ms ad timer");
+Check(ytScript.Contains("if (!hid) {", StringComparison.Ordinal),
+    "YouTube focus-mode selector sweep runs only when entering focus mode");
+Check(Injections.PageCover.Contains("if (self !== top) return;", StringComparison.Ordinal),
+    "page cover only runs in the top-level frame");
+Check(Injections.PageCover.Contains("busyObserver?.disconnect()", StringComparison.Ordinal),
+    "page cover disconnects long-task observation after loading");
+Check(!Injections.Vim.Contains("mouse = [e.clientX, e.clientY]", StringComparison.Ordinal),
+    "mousemove tracking does not allocate a coordinate array per event");
+Check(Injections.TranslateApplyFn.Contains("st.units = null", StringComparison.Ordinal),
+    "completed translation releases temporary DOM assembly references");
+var memo = new TranslationMemo(entryCap: 2, characterCap: 12);
+memo.Set("a", "11", null);
+memo.Set("b", "22", null);
+_ = memo.Get("a"); // a を最近使用にし、次の追加で b が追い出されることを確認
+memo.Set("c", "33", null);
+Check(memo.Get("a") is not null && memo.Get("b") is null && memo.Get("c") is not null && memo.Count == 2,
+    "translation memo evicts the least recently used entry at its count limit");
+memo.Set("long", "0123456789", null);
+Check(memo.Get("long") is null && memo.Characters <= 12,
+    "translation memo skips a single entry larger than its character budget");
+var charMemo = new TranslationMemo(entryCap: 10, characterCap: 8);
+charMemo.Set("aa", "11", null);
+charMemo.Set("bb", "222", null);
+Check(charMemo.Get("aa") is null && charMemo.Get("bb") is not null && charMemo.Characters == 5,
+    "translation memo evicts LRU entries until it fits its character budget");
 // YouTube などは Trusted Types を強制していて、HTML文字列を DOM へ入れる API は例外になる(実測)
 foreach (var (name, js) in new[]
 {
@@ -108,6 +138,7 @@ var adDefaults = new AppSettings();
 adDefaults.Normalize();
 Check(adDefaults.YouTubeAdSpeedUp, "ad speed-up on by default");
 Check(adDefaults.YouTubeAdCover, "ad cover on by default");
+Check(adDefaults.MaxLiveTabs == 6, "six live tabs kept by default");
 
 Equal("mailto:a@b.example", UrlUtil.Normalize("mailto:a@b.example"), "mailto passes through to the mail client");
 Check(UrlUtil.Normalize("ftp://x.example/z").Contains("google.com/search", StringComparison.Ordinal),
@@ -147,15 +178,20 @@ Check(KeyedList.KeyToChar(System.Windows.Input.Key.Enter) is null && KeyedList.K
 var invalidSettings = new AppSettings
 {
     MaxFps = -1,
+    MaxLiveTabs = -1,
     WarmTabs = -1,
     HibernateColdSeconds = -1,
     PressureAvailableGB = double.NaN,
 };
 invalidSettings.Normalize();
 Check(invalidSettings.MaxFps == 0, "MaxFps clamped");
+Check(invalidSettings.MaxLiveTabs == 0, "negative live-tab limit means unlimited");
 Check(invalidSettings.WarmTabs == 0, "WarmTabs clamped");
 Check(invalidSettings.HibernateColdSeconds == 15, "hibernate seconds clamped");
 Check(invalidSettings.PressureAvailableGB == 1.5, "NaN memory threshold repaired");
+var excessiveSettings = new AppSettings { MaxLiveTabs = 101 };
+excessiveSettings.Normalize();
+Check(excessiveSettings.MaxLiveTabs == 100, "live-tab limit clamped at its upper bound");
 
 var lifecycle = new AppSettings
 {
@@ -179,6 +215,32 @@ Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(29), 0, true, lifec
       TabLifecyclePolicy.Action.Suspend, "memory pressure does not hibernate before 30 seconds");
 Check(TabLifecyclePolicy.ForInactiveTab(TimeSpan.FromSeconds(30), 0, true, lifecycle) ==
       TabLifecyclePolicy.Action.Hibernate, "memory pressure overrides warm-tab retention");
+Check(!TabLifecyclePolicy.ShouldHibernateForCapacity(TimeSpan.FromSeconds(59), true),
+    "live-tab capacity keeps a 60-second grace period");
+Check(!TabLifecyclePolicy.ShouldHibernateForCapacity(TimeSpan.FromSeconds(60), false),
+    "live-tab capacity never destroys a tab that WebView2 could not suspend");
+Check(TabLifecyclePolicy.ShouldHibernateForCapacity(TimeSpan.FromSeconds(60), true),
+    "live-tab capacity hibernates an already suspended tab after its grace period");
+var cappedTabs = new AppSettings { MaxLiveTabs = 6 };
+Check(!TabLifecyclePolicy.IsOverLiveLimit(5, cappedTabs) &&
+      TabLifecyclePolicy.IsOverLiveLimit(6, cappedTabs),
+    "live-tab limit includes the active tab and starts beyond six retained tabs");
+cappedTabs.MaxLiveTabs = 0;
+Check(!TabLifecyclePolicy.IsOverLiveLimit(100, cappedTabs), "zero live-tab limit means unlimited");
+var downloadTab = new BrowserTab();
+long download1 = downloadTab.BeginDownload();
+long download2 = downloadTab.BeginDownload();
+downloadTab.EndDownload(download1);
+Check(downloadTab.HasActiveDownloads, "tab remains protected until every download finishes");
+downloadTab.EndDownload(download2);
+downloadTab.EndDownload(download2);
+Check(!downloadTab.HasActiveDownloads, "download protection clears and never underflows");
+long staleDownload = downloadTab.BeginDownload();
+downloadTab.Detach(null, 0);
+long currentDownload = downloadTab.BeginDownload();
+downloadTab.EndDownload(staleDownload);
+Check(downloadTab.HasActiveDownloads, "completion from a disposed WebView cannot clear a new download");
+downloadTab.EndDownload(currentDownload);
 Check(!TabLifecyclePolicy.ShouldSuspendActiveTab(TimeSpan.FromSeconds(15) - TimeSpan.FromTicks(1)) &&
       TabLifecyclePolicy.ShouldSuspendActiveTab(TimeSpan.FromSeconds(15)),
     "minimized active tab suspends at 15 seconds");

@@ -159,7 +159,11 @@ static partial class Injections
       try { o.node.nodeValue = o.trans; } catch (e) {}
     }
   }
-  if (final) st.transNodes = leafEls.map(el => Array.from(el.childNodes, n => n.cloneNode(true)));
+  if (final) {
+    st.transNodes = leafEls.map(el => Array.from(el.childNodes, n => n.cloneNode(true)));
+    // 最終適用後の再表示は transNodes だけで行える。template/子要素を保持する units を切り離す。
+    st.units = null;
+  }
   st.shown = 'translated';
   return units.length + orphans.length;
 })
